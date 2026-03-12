@@ -18,6 +18,7 @@ import (
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
+	"github.com/wesm/agentsview/internal/pgsync"
 	"github.com/wesm/agentsview/internal/server"
 	"github.com/wesm/agentsview/internal/sync"
 )
@@ -93,6 +94,8 @@ Server flags:
 
 Sync flags:
   -full              Force a full resync regardless of data version
+  -pg                Push to PostgreSQL now
+  -pg-status         Show PG sync status
 
 Prune flags:
   -project string     Sessions whose project contains this substring
@@ -117,6 +120,9 @@ Environment variables:
   IFLOW_DIR               iFlow projects directory
   AMP_DIR                 Amp threads directory
   AGENT_VIEWER_DATA_DIR   Data directory (database, config)
+  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
+  AGENTSVIEW_PG_MACHINE   Machine name for PG sync
+  AGENTSVIEW_PG_INTERVAL  PG sync interval (e.g. "1h", "30m")
 
 Watcher excludes:
   Add "watch_exclude_patterns" to ~/.agentsview/config.json to skip
@@ -228,6 +234,48 @@ func runServe(args []string) {
 		}
 		if cfg.AuthToken != "" {
 			fmt.Printf("Remote access enabled. Auth token: %s\n", cfg.AuthToken)
+		}
+	}
+
+	// Start PG sync if configured.
+	var pgSync *pgsync.PGSync
+	resolvedPG, pgResolveErr := cfg.ResolvePGSync()
+	if pgResolveErr != nil {
+		log.Printf("warning: pg sync config: %v", pgResolveErr)
+	} else {
+		cfg.PGSync = resolvedPG
+	}
+	if pgCfg := cfg.PGSync; pgResolveErr == nil && pgCfg.Enabled && pgCfg.PostgresURL != "" {
+		interval, parseErr := time.ParseDuration(pgCfg.Interval)
+		if parseErr != nil {
+			log.Printf("warning: pg sync invalid interval %q: %v",
+				pgCfg.Interval, parseErr)
+		} else {
+			ps, pgErr := pgsync.New(
+				pgCfg.PostgresURL, database, pgCfg.MachineName,
+				interval,
+			)
+			if pgErr != nil {
+				log.Printf("warning: pg sync disabled: %v", pgErr)
+			} else {
+				pgSync = ps
+				defer pgSync.Close()
+				ctx, cancel := context.WithCancel(
+					context.Background(),
+				)
+				defer cancel()
+				if schemaErr := pgSync.EnsureSchema(ctx); schemaErr != nil {
+					log.Printf(
+						"warning: pg sync schema: %v", schemaErr,
+					)
+				} else {
+					go pgSync.StartPeriodicSync(ctx)
+					log.Printf(
+						"pg sync enabled (machine=%s, interval=%s)",
+						pgCfg.MachineName, pgCfg.Interval,
+					)
+				}
+			}
 		}
 	}
 

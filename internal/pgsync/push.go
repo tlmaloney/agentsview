@@ -1,0 +1,532 @@
+package pgsync
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/wesm/agentsview/internal/db"
+)
+
+const lastPushBoundaryStateKey = "last_push_boundary_state"
+
+// syncStateStore abstracts sync state read/write operations on the
+// local database. Used by push boundary state helpers.
+type syncStateStore interface {
+	GetSyncState(key string) (string, error)
+	SetSyncState(key, value string) error
+}
+
+type pushBoundaryState struct {
+	Cutoff       string            `json:"cutoff"`
+	Fingerprints map[string]string `json:"fingerprints"`
+}
+
+// PushResult summarizes a push sync operation.
+type PushResult struct {
+	SessionsPushed int
+	MessagesPushed int
+	Duration       time.Duration
+}
+
+// Push syncs local sessions and messages to PostgreSQL.
+// Only sessions modified since the last push are processed.
+// When full is true, the per-message content heuristic is bypassed
+// and every candidate session's messages are re-pushed unconditionally.
+func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
+	start := time.Now()
+	var result PushResult
+
+	if err := p.normalizeSyncTimestamps(ctx); err != nil {
+		return result, err
+	}
+
+	lastPush, err := p.local.GetSyncState("last_push_at")
+	if err != nil {
+		return result, fmt.Errorf("reading last_push_at: %w", err)
+	}
+
+	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
+
+	allSessions, err := p.local.ListSessionsModifiedBetween(
+		ctx, lastPush, cutoff,
+	)
+	if err != nil {
+		return result, fmt.Errorf("listing modified sessions: %w", err)
+	}
+
+	sessionByID := make(map[string]db.Session, len(allSessions))
+	for _, s := range allSessions {
+		sessionByID[s.ID] = s
+	}
+	if lastPush != "" {
+		boundaryState, ok, err := readPushBoundaryState(p.local, lastPush)
+		if err != nil {
+			return result, err
+		}
+		windowStart, err := previousLocalSyncTimestamp(lastPush)
+		if err != nil {
+			return result, fmt.Errorf(
+				"computing push boundary window before %s: %w",
+				lastPush, err,
+			)
+		}
+		boundarySessions, err := p.local.ListSessionsModifiedBetween(
+			ctx, windowStart, lastPush,
+		)
+		if err != nil {
+			return result, fmt.Errorf(
+				"listing push boundary sessions: %w", err,
+			)
+		}
+
+		for _, s := range boundarySessions {
+			marker := localSessionSyncMarker(s)
+			if marker != lastPush {
+				continue
+			}
+			if ok {
+				fingerprint := sessionPushFingerprint(s)
+				if boundaryState[s.ID] == fingerprint {
+					continue
+				}
+			}
+			// When ok is false (no prior boundary state, e.g. after
+			// process restart), we conservatively re-push all boundary
+			// sessions rather than skip them, since we cannot tell
+			// whether they were already pushed. The upserts make this
+			// redundant work benign.
+			if _, exists := sessionByID[s.ID]; exists {
+				continue
+			}
+			sessionByID[s.ID] = s
+		}
+	}
+
+	var sessions []db.Session
+	for _, s := range sessionByID {
+		sessions = append(sessions, s)
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ID < sessions[j].ID
+	})
+
+	if len(sessions) == 0 {
+		if err := finalizePushState(p.local, cutoff, sessions); err != nil {
+			return result, err
+		}
+		result.Duration = time.Since(start)
+		return result, nil
+	}
+
+	// NOTE: If any session push fails, we return without updating
+	// last_push_at. Sessions successfully pushed earlier in the loop
+	// will be re-pushed on the next cycle. Each per-session PG
+	// transaction commits individually so PG state is consistent;
+	// the redundant work is benign since pushSession and pushMessages
+	// use upserts.
+	for _, s := range sessions {
+		tx, err := p.pg.BeginTx(ctx, nil)
+		if err != nil {
+			return result, fmt.Errorf("begin pg tx: %w", err)
+		}
+
+		if err := p.pushSession(ctx, tx, s); err != nil {
+			_ = tx.Rollback()
+			return result, fmt.Errorf(
+				"upserting session %s: %w", s.ID, err,
+			)
+		}
+
+		msgCount, err := p.pushMessages(ctx, tx, s.ID, full)
+		if err != nil {
+			_ = tx.Rollback()
+			return result, fmt.Errorf(
+				"pushing messages for %s: %w", s.ID, err,
+			)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return result, fmt.Errorf("commit pg tx: %w", err)
+		}
+
+		result.SessionsPushed++
+		result.MessagesPushed += msgCount
+	}
+
+	if err := finalizePushState(p.local, cutoff, sessions); err != nil {
+		return result, err
+	}
+
+	result.Duration = time.Since(start)
+	return result, nil
+}
+
+func finalizePushState(local syncStateStore, cutoff string, sessions []db.Session) error {
+	if err := local.SetSyncState("last_push_at", cutoff); err != nil {
+		return fmt.Errorf("updating last_push_at: %w", err)
+	}
+	if err := writePushBoundaryState(local, cutoff, sessions); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readPushBoundaryState(local syncStateStore, cutoff string) (map[string]string, bool, error) {
+	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", lastPushBoundaryStateKey, err)
+	}
+	if raw == "" {
+		return map[string]string{}, false, nil
+	}
+	var state pushBoundaryState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return map[string]string{}, false, nil
+	}
+	if state.Cutoff != cutoff || state.Fingerprints == nil {
+		return map[string]string{}, false, nil
+	}
+	return state.Fingerprints, true, nil
+}
+
+func writePushBoundaryState(local syncStateStore, cutoff string, sessions []db.Session) error {
+	state := pushBoundaryState{
+		Cutoff:       cutoff,
+		Fingerprints: make(map[string]string),
+	}
+	for _, s := range sessions {
+		if localSessionSyncMarker(s) != cutoff {
+			continue
+		}
+		state.Fingerprints[s.ID] = sessionPushFingerprint(s)
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("encoding %s: %w", lastPushBoundaryStateKey, err)
+	}
+	if err := local.SetSyncState(lastPushBoundaryStateKey, string(data)); err != nil {
+		return fmt.Errorf("writing %s: %w", lastPushBoundaryStateKey, err)
+	}
+	return nil
+}
+
+func localSessionSyncMarker(s db.Session) string {
+	marker, err := normalizeLocalSyncTimestamp(s.CreatedAt)
+	if err != nil || marker == "" {
+		if err != nil {
+			log.Printf("pgsync: normalizing CreatedAt %q for session %s: %v (skipping non-RFC3339 value)", s.CreatedAt, s.ID, err)
+		}
+		marker = ""
+	}
+	for _, value := range []*string{
+		s.LocalModifiedAt,
+		s.EndedAt,
+		s.StartedAt,
+	} {
+		if value == nil {
+			continue
+		}
+		normalized, err := normalizeLocalSyncTimestamp(*value)
+		if err != nil {
+			continue
+		}
+		if normalized > marker {
+			marker = normalized
+		}
+	}
+	if s.FileMtime != nil {
+		fileMtime := time.Unix(0, *s.FileMtime).UTC().Format(localSyncTimestampLayout)
+		if fileMtime > marker {
+			marker = fileMtime
+		}
+	}
+	if marker == "" {
+		log.Printf("pgsync: session %s: all timestamps failed normalization, falling back to raw CreatedAt %q", s.ID, s.CreatedAt)
+		marker = s.CreatedAt
+	}
+	return marker
+}
+
+func sessionPushFingerprint(s db.Session) string {
+	fields := []string{
+		s.ID,
+		s.Project,
+		s.Machine,
+		s.Agent,
+		stringValue(s.FirstMessage),
+		stringValue(s.DisplayName),
+		stringValue(s.StartedAt),
+		stringValue(s.EndedAt),
+		stringValue(s.DeletedAt),
+		fmt.Sprintf("%d", s.MessageCount),
+		fmt.Sprintf("%d", s.UserMessageCount),
+		stringValue(s.ParentSessionID),
+		s.RelationshipType,
+		stringValue(s.FileHash),
+		int64Value(s.FileMtime),
+		stringValue(s.LocalModifiedAt),
+		s.CreatedAt,
+	}
+	var b strings.Builder
+	for _, f := range fields {
+		fmt.Fprintf(&b, "%d:%s", len(f), f)
+	}
+	return b.String()
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func int64Value(value *int64) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *value)
+}
+
+// nilStr converts a nil or empty *string to SQL NULL.
+func nilStr(s *string) any {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return *s
+}
+
+// pushSession upserts a single session into PG.
+// File-level metadata (file_hash, file_path, file_size, file_mtime)
+// is intentionally not synced to PG — it is local-only and used
+// solely by the sync engine to detect re-parsed sessions.
+func (p *PGSync) pushSession(
+	ctx context.Context, tx *sql.Tx, s db.Session,
+) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO agentsview.sessions (
+			id, machine, project, agent,
+			first_message, display_name,
+			started_at, ended_at, deleted_at,
+			message_count, user_message_count,
+			parent_session_id, relationship_type,
+			updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, `+pgTimestampSQL("NOW() AT TIME ZONE 'UTC'")+`)
+		ON CONFLICT (id) DO UPDATE SET
+			machine = EXCLUDED.machine,
+			project = EXCLUDED.project,
+			agent = EXCLUDED.agent,
+			first_message = EXCLUDED.first_message,
+			display_name = EXCLUDED.display_name,
+			started_at = EXCLUDED.started_at,
+			ended_at = EXCLUDED.ended_at,
+			deleted_at = EXCLUDED.deleted_at,
+			message_count = EXCLUDED.message_count,
+			user_message_count = EXCLUDED.user_message_count,
+			parent_session_id = EXCLUDED.parent_session_id,
+			relationship_type = EXCLUDED.relationship_type,
+			updated_at = `+pgTimestampSQL("NOW() AT TIME ZONE 'UTC'")+`
+		WHERE agentsview.sessions.machine IS DISTINCT FROM EXCLUDED.machine
+			OR agentsview.sessions.project IS DISTINCT FROM EXCLUDED.project
+			OR agentsview.sessions.agent IS DISTINCT FROM EXCLUDED.agent
+			OR agentsview.sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
+			OR agentsview.sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
+			OR agentsview.sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
+			OR agentsview.sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
+			OR agentsview.sessions.deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
+			OR agentsview.sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
+			OR agentsview.sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
+			OR agentsview.sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
+			OR agentsview.sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type`,
+		s.ID, p.machine, s.Project, s.Agent,
+		nilStr(s.FirstMessage), nilStr(s.DisplayName),
+		nilStr(s.StartedAt), nilStr(s.EndedAt), nilStr(s.DeletedAt),
+		s.MessageCount, s.UserMessageCount,
+		nilStr(s.ParentSessionID), s.RelationshipType,
+	)
+	return err
+}
+
+// pushMessages replaces a session's messages and tool calls in PG.
+// It skips the replacement when the PG message count already matches
+// the local count, avoiding redundant work for metadata-only changes.
+func (p *PGSync) pushMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string, full bool,
+) (int, error) {
+	localCount, err := p.local.MessageCount(sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("counting local messages: %w", err)
+	}
+	if localCount == 0 {
+		return 0, nil
+	}
+
+	var pgCount int
+	var pgContentSum, pgContentMax, pgContentMin int64
+	var pgToolCallCount int
+	var pgTCContentSum int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(content_length), 0), COALESCE(MAX(content_length), 0), COALESCE(MIN(content_length), 0)
+		 FROM agentsview.messages
+		 WHERE session_id = $1`,
+		sessionID,
+	).Scan(&pgCount, &pgContentSum, &pgContentMax, &pgContentMin); err != nil {
+		return 0, fmt.Errorf("counting pg messages: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(result_content_length), 0) FROM agentsview.tool_calls
+		 WHERE session_id = $1`,
+		sessionID,
+	).Scan(&pgToolCallCount, &pgTCContentSum); err != nil {
+		return 0, fmt.Errorf("counting pg tool_calls: %w", err)
+	}
+
+	// Heuristic skip: if message count, content fingerprint
+	// (sum + max + min of content_length), tool_call count, and
+	// tool_call content fingerprint (sum of result_content_length)
+	// all match we assume the session is unchanged. Skipped when
+	// full=true.
+	if !full && pgCount == localCount && pgCount > 0 {
+		localSum, localMax, localMin, err := p.local.MessageContentFingerprint(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf("computing local content fingerprint: %w", err)
+		}
+		localTCCount, err := p.local.ToolCallCount(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf("counting local tool_calls: %w", err)
+		}
+		localTCSum, err := p.local.ToolCallContentFingerprint(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf("computing local tool_call content fingerprint: %w", err)
+		}
+		if localSum == pgContentSum &&
+			localMax == pgContentMax &&
+			localMin == pgContentMin &&
+			localTCCount == pgToolCallCount &&
+			localTCSum == pgTCContentSum {
+			return 0, nil
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM agentsview.tool_calls
+		WHERE session_id = $1
+	`, sessionID); err != nil {
+		return 0, fmt.Errorf("deleting pg tool_calls: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM agentsview.messages
+		WHERE session_id = $1
+	`, sessionID); err != nil {
+		return 0, fmt.Errorf("deleting pg messages: %w", err)
+	}
+
+	msgStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO agentsview.messages (
+			session_id, ordinal, role, content,
+			timestamp, has_thinking, has_tool_use, content_length
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
+	if err != nil {
+		return 0, fmt.Errorf("preparing message insert: %w", err)
+	}
+	defer msgStmt.Close()
+
+	tcStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO agentsview.tool_calls (
+			session_id, tool_name, category,
+			call_index, tool_use_id, input_json, skill_name,
+			result_content_length, result_content,
+			subagent_session_id, message_ordinal
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`)
+	if err != nil {
+		return 0, fmt.Errorf("preparing tool_call insert: %w", err)
+	}
+	defer tcStmt.Close()
+
+	count := 0
+	startOrdinal := 0
+	for {
+		msgs, err := p.local.GetMessages(
+			ctx, sessionID, startOrdinal, db.MaxMessageLimit, true,
+		)
+		if err != nil {
+			return count, fmt.Errorf(
+				"reading local messages: %w", err,
+			)
+		}
+		if len(msgs) == 0 {
+			break
+		}
+
+		nextOrdinal := msgs[len(msgs)-1].Ordinal + 1
+		if nextOrdinal <= startOrdinal {
+			log.Printf("pgsync: pushMessages %s: ordinal did not advance (start=%d, last=%d); breaking",
+				sessionID, startOrdinal, msgs[len(msgs)-1].Ordinal)
+			break
+		}
+
+		for _, m := range msgs {
+			var ts any
+			if m.Timestamp != "" {
+				ts = m.Timestamp
+			}
+			_, err := msgStmt.ExecContext(ctx,
+				sessionID, m.Ordinal, m.Role,
+				m.Content, ts, m.HasThinking, m.HasToolUse,
+				m.ContentLength,
+			)
+			if err != nil {
+				return count, fmt.Errorf(
+					"inserting message ordinal %d: %w",
+					m.Ordinal, err,
+				)
+			}
+			count++
+
+			for i, tc := range m.ToolCalls {
+				_, err := tcStmt.ExecContext(ctx,
+					sessionID,
+					tc.ToolName, tc.Category,
+					i,
+					tc.ToolUseID,
+					nilIfEmpty(tc.InputJSON),
+					nilIfEmpty(tc.SkillName),
+					nilIfZero(tc.ResultContentLength),
+					nilIfEmpty(tc.ResultContent),
+					nilIfEmpty(tc.SubagentSessionID),
+					m.Ordinal,
+				)
+				if err != nil {
+					return count, fmt.Errorf(
+						"inserting tool_call: %w", err,
+					)
+				}
+			}
+		}
+
+		startOrdinal = nextOrdinal
+	}
+
+	return count, nil
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nilIfZero(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
+}

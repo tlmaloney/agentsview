@@ -272,6 +272,10 @@ func (db *DB) migrateColumns() error {
 			"sessions", "deleted_at",
 			"ALTER TABLE sessions ADD COLUMN deleted_at TEXT",
 		},
+		{
+			"sessions", "local_modified_at",
+			"ALTER TABLE sessions ADD COLUMN local_modified_at TEXT",
+		},
 	}
 
 	for _, m := range migrations {
@@ -604,4 +608,29 @@ func (db *DB) Update(fn func(tx *sql.Tx) error) error {
 // Reader returns the read-only connection pool.
 func (db *DB) Reader() *sql.DB {
 	return db.getReader()
+}
+
+// GetSyncState reads a value from the pg_sync_state table.
+func (db *DB) GetSyncState(key string) (string, error) {
+	var value string
+	err := db.getReader().QueryRow(
+		"SELECT value FROM pg_sync_state WHERE key = ?", key,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// SetSyncState writes a value to the pg_sync_state table.
+func (db *DB) SetSyncState(key, value string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`INSERT INTO pg_sync_state (key, value)
+		 VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	return err
 }
