@@ -15,8 +15,8 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@tanstack/virtual-core": "3.13.19",
-    "dompurify": "3.3.1",
+    "@tanstack/virtual-core": "3.13.21",
+    "dompurify": "3.3.3",
     "marked": "17.0.4"
   },
   "devDependencies": {
@@ -25,8 +25,8 @@
     "@tsconfig/svelte": "5.0.8",
     "@types/dompurify": "3.2.0",
     "jsdom": "28.1.0",
-    "svelte": "5.53.7",
-    "svelte-check": "4.4.4",
+    "svelte": "5.53.10",
+    "svelte-check": "4.4.5",
     "typescript": "5.9.3",
     "vite": "7.3.1",
     "vitest": "4.0.18"
