@@ -1798,25 +1798,24 @@ func (p *PGDB) GetAnalyticsTopSessions(
 		}
 	}
 
-	var orderExpr string
-	switch metric {
-	case "duration":
-		orderExpr = `(EXTRACT(EPOCH FROM (ended_at::timestamp - started_at::timestamp)) / 60.0) DESC, id ASC`
-		where += " AND started_at IS NOT NULL AND started_at != ''" +
-			" AND ended_at IS NOT NULL AND ended_at != ''" +
-			` AND started_at ~ '^\d{4}-\d{2}-\d{2}'` +
-			` AND ended_at ~ '^\d{4}-\d{2}-\d{2}'`
-	default:
+	// Duration ranking is computed in Go (safe timestamp parsing)
+	// rather than via SQL ::timestamp casts that can fail on
+	// non-ISO strings. SQL always orders by message_count as a
+	// reasonable candidate-selection proxy.
+	needsGoSort := metric == "duration"
+	if metric != "duration" && metric != "messages" {
 		metric = "messages"
-		orderExpr = "message_count DESC, id ASC"
+	}
+	orderExpr := "message_count DESC, id ASC"
+	if metric == "duration" {
+		where += " AND started_at IS NOT NULL AND started_at != ''" +
+			" AND ended_at IS NOT NULL AND ended_at != ''"
 	}
 
-	// When time-of-day/day-of-week filtering is active, skip
-	// the SQL LIMIT so the Go-side filter sees all candidates.
-	// Without time filters, LIMIT 1000 is safe since the SQL
-	// ORDER BY already produces the correct ranking.
+	// Skip the SQL LIMIT when Go-side filtering or sorting is
+	// needed so all candidates are available.
 	limitClause := " LIMIT 1000"
-	if f.HasTimeFilter() {
+	if f.HasTimeFilter() || needsGoSort {
 		limitClause = ""
 	}
 	query := `SELECT id, ` + pgDateCol + `, project,
@@ -1877,20 +1876,17 @@ func (p *PGDB) GetAnalyticsTopSessions(
 		sessions = []db.TopSession{}
 	}
 
-	// When Go-side time filtering removed rows, the SQL ordering
-	// may have gaps. Re-sort by the active metric so the top 10
-	// are correct after filtering.
-	if f.HasTimeFilter() && len(sessions) > 1 {
-		switch metric {
-		case "duration":
-			sort.Slice(sessions, func(i, j int) bool {
+	// Duration ranking is computed in Go, so sort by duration
+	// descending with id as a stable tie-breaker (matching the
+	// SQL tie-breaker for messages). For messages, SQL already
+	// provides the correct order and filtering preserves it.
+	if needsGoSort && len(sessions) > 1 {
+		sort.SliceStable(sessions, func(i, j int) bool {
+			if sessions[i].DurationMin != sessions[j].DurationMin {
 				return sessions[i].DurationMin > sessions[j].DurationMin
-			})
-		default:
-			sort.Slice(sessions, func(i, j int) bool {
-				return sessions[i].MessageCount > sessions[j].MessageCount
-			})
-		}
+			}
+			return sessions[i].ID < sessions[j].ID
+		})
 	}
 
 	if len(sessions) > 10 {
