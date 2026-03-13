@@ -25,6 +25,25 @@ func isUndefinedTable(err error) bool {
 	return strings.Contains(err.Error(), "42P01")
 }
 
+// warnInsecureSSL logs a warning when the PG connection string
+// targets a non-loopback host without TLS encryption.
+func warnInsecureSSL(dsn string) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return
+	}
+	mode := u.Query().Get("sslmode")
+	if mode == "" || mode == "disable" || mode == "prefer" || mode == "allow" {
+		log.Printf("warning: pg connection to %s uses sslmode=%q; "+
+			"consider sslmode=require or verify-full for non-local hosts",
+			host, mode)
+	}
+}
+
 // redactDSN returns the host portion of the DSN for diagnostics,
 // stripping credentials, query parameters, and path components
 // that may contain secrets.
@@ -69,6 +88,7 @@ func New(
 			"machine name %q is reserved; choose a different pg_sync.machine_name", machine,
 		)
 	}
+	warnInsecureSSL(pgURL)
 	if local == nil {
 		return nil, fmt.Errorf("local db is required")
 	}

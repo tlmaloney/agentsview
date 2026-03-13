@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/url"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -25,8 +26,28 @@ func redactDSN(dsn string) string {
 	return u.Hostname()
 }
 
+// warnInsecureSSL logs a warning when the PG connection string
+// targets a non-loopback host without TLS encryption.
+func warnInsecureSSL(dsn string) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return
+	}
+	mode := u.Query().Get("sslmode")
+	if mode == "" || mode == "disable" || mode == "prefer" || mode == "allow" {
+		log.Printf("warning: pg connection to %s uses sslmode=%q; "+
+			"consider sslmode=require or verify-full for non-local hosts",
+			host, mode)
+	}
+}
+
 // New opens a PostgreSQL connection and returns a PGDB.
 func New(pgURL string) (*PGDB, error) {
+	warnInsecureSSL(pgURL)
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
 		return nil, fmt.Errorf("opening pg (host=%s): %w",
@@ -155,7 +176,18 @@ func (p *PGDB) ReplaceSessionMessages(_ string, _ []db.Message) error {
 	return db.ErrReadOnly
 }
 
-// GetSessionVersion returns 0, 0, false; PG mode has no file metadata.
-func (p *PGDB) GetSessionVersion(_ string) (int, int64, bool) {
-	return 0, 0, false
+// GetSessionVersion returns the message count for SSE change
+// detection. PG has no file_mtime so it returns 0 for that field.
+// This allows the /watch endpoint to detect when new messages are
+// pushed to PG by another machine.
+func (p *PGDB) GetSessionVersion(id string) (int, int64, bool) {
+	var count int
+	err := p.pg.QueryRow(
+		"SELECT message_count FROM agentsview.sessions WHERE id = $1",
+		id,
+	).Scan(&count)
+	if err != nil {
+		return 0, 0, false
+	}
+	return count, 0, true
 }
