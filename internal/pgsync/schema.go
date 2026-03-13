@@ -95,6 +95,24 @@ func ensureSchema(ctx context.Context, pg *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("adding sessions.created_at: %w", err)
 	}
+	// Backfill empty created_at from existing timestamp columns so
+	// historical rows sort correctly in PG read mode.
+	if _, err := pg.ExecContext(ctx, `
+		UPDATE agentsview.sessions
+		SET created_at = COALESCE(
+			NULLIF(started_at, ''),
+			NULLIF(ended_at, ''),
+			NULLIF(updated_at, ''),
+			''
+		)
+		WHERE created_at = '' AND (
+			COALESCE(started_at, '') != ''
+			OR COALESCE(ended_at, '') != ''
+			OR COALESCE(updated_at, '') != ''
+		)
+	`); err != nil {
+		return fmt.Errorf("backfilling sessions.created_at: %w", err)
+	}
 	if _, err := pg.ExecContext(ctx, `
 		ALTER TABLE agentsview.tool_calls
 		ADD COLUMN IF NOT EXISTS call_index INT NOT NULL DEFAULT 0

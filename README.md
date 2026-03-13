@@ -182,12 +182,16 @@ Configure `pg_sync` in `~/.agentsview/config.json`:
 ```json
 {
   "pg_sync": {
-    "postgres_url": "postgres://user:pass@host:5432/dbname?sslmode=disable",
+    "postgres_url": "postgres://user:pass@host:5432/dbname?sslmode=require",
     "machine_name": "my-laptop",
     "interval": "15m"
   }
 }
 ```
+
+Use `sslmode=require` (or `verify-full` for CA-verified connections)
+for non-local PostgreSQL instances. Only use `sslmode=disable` for
+trusted local/loopback connections.
 
 The `machine_name` identifies which machine pushed each session
 (must not be `"local"`, which is reserved). The `interval` controls
@@ -209,7 +213,7 @@ starts with `pg_sync` configured.
 Serve the web UI directly from PostgreSQL with no local SQLite:
 
 ```bash
-agentsview serve -pg-read 'postgres://user:pass@host:5432/dbname?sslmode=disable'
+agentsview serve -pg-read 'postgres://user:pass@host:5432/dbname?sslmode=require'
 ```
 
 This mode is useful for shared team viewers where multiple machines

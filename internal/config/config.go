@@ -775,6 +775,12 @@ func (c *Config) ResolvePGSync() (PGSyncConfig, error) {
 		}
 		pg.PostgresURL = expanded
 	}
+	// Treat postgres_url presence as sufficient to enable sync.
+	// This avoids requiring an explicit "enabled": true in the
+	// config file when the URL is already set.
+	if pg.PostgresURL != "" {
+		pg.Enabled = true
+	}
 	if pg.Interval == "" {
 		pg.Interval = "1h"
 	}
