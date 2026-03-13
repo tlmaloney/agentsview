@@ -52,16 +52,18 @@ func (s *Server) sessionMonitor(
 	go func() {
 		defer close(ch)
 
-		if s.engine == nil {
-			// PG read mode: no file watching.
-			<-ctx.Done()
-			return
-		}
-
 		// Seed initial state from the database.
 		lastCount, lastDBMtime, _ := s.db.GetSessionVersion(
 			sessionID,
 		)
+
+		if s.engine == nil {
+			// PG read mode: poll GetSessionVersion only,
+			// no file watching or fallback sync.
+			s.pollDBOnly(ctx, ch, sessionID,
+				lastCount, lastDBMtime)
+			return
+		}
 
 		// Track file mtime for fallback sync.
 		sourcePath := s.engine.FindSourceFile(sessionID)
@@ -98,6 +100,35 @@ func (s *Server) sessionMonitor(
 		}
 	}()
 	return ch
+}
+
+// pollDBOnly polls GetSessionVersion on a timer and signals ch
+// when changes are detected. Used in PG-read mode where there is
+// no sync engine or file watcher.
+func (s *Server) pollDBOnly(
+	ctx context.Context, ch chan<- struct{},
+	sessionID string, lastCount int, lastDBMtime int64,
+) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count, dbMtime, ok := s.db.GetSessionVersion(sessionID)
+			if ok && (count != lastCount || dbMtime != lastDBMtime) {
+				lastCount = count
+				lastDBMtime = dbMtime
+				select {
+				case ch <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
 }
 
 // checkDBForChanges polls the database for a session's

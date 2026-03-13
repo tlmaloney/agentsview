@@ -689,20 +689,23 @@ func startUnwatchedPoll(engine *sync.Engine) {
 // push sync) are not available in this mode.
 func runServePGRead(cfg config.Config, start time.Time) {
 	// Zero out settings that are not supported in pg-read mode so
-	// they don't leak into server.New and enable auth middleware
-	// or other features that don't apply.
+	// they don't leak into server.New and enable auth middleware,
+	// CORS origins, or other features that don't apply.
 	if cfg.RemoteAccess {
 		log.Println("warning: remote_access is ignored in pg-read mode")
-		cfg.RemoteAccess = false
-		cfg.AuthToken = ""
 	}
 	if cfg.Proxy.Mode != "" {
 		log.Println("warning: proxy config is ignored in pg-read mode")
-		cfg.Proxy = config.ProxyConfig{}
 	}
 	if cfg.PGSync.PostgresURL != "" {
 		log.Println("warning: pg_sync config is ignored in pg-read mode")
 	}
+	cfg.RemoteAccess = false
+	cfg.AuthToken = ""
+	cfg.PublicURL = ""
+	cfg.PublicOrigins = nil
+	cfg.Proxy = config.ProxyConfig{}
+	cfg.PGSync = config.PGSyncConfig{}
 
 	// PG-read mode has no auth middleware, so reject non-loopback
 	// binds to avoid exposing session data on the network.

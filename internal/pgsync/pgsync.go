@@ -26,22 +26,37 @@ func isUndefinedTable(err error) bool {
 }
 
 // warnInsecureSSL logs a warning when the PG connection string
-// targets a non-loopback host without TLS encryption.
+// targets a non-loopback host without TLS encryption. Handles
+// both URI (postgres://...) and key-value (host=... sslmode=...)
+// connection string formats.
 func warnInsecureSSL(dsn string) {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return
-	}
-	host := u.Hostname()
+	host, mode := parseSSLParams(dsn)
 	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
 		return
 	}
-	mode := u.Query().Get("sslmode")
 	if mode == "" || mode == "disable" || mode == "prefer" || mode == "allow" {
 		log.Printf("warning: pg connection to %s uses sslmode=%q; "+
 			"consider sslmode=require or verify-full for non-local hosts",
 			host, mode)
 	}
+}
+
+// parseSSLParams extracts host and sslmode from a DSN. It tries
+// URI format first, then falls back to key-value format.
+func parseSSLParams(dsn string) (host, sslmode string) {
+	if u, err := url.Parse(dsn); err == nil && u.Host != "" {
+		return u.Hostname(), u.Query().Get("sslmode")
+	}
+	// Key-value format: host=... sslmode=...
+	for _, part := range strings.Fields(dsn) {
+		if strings.HasPrefix(part, "host=") {
+			host = strings.TrimPrefix(part, "host=")
+		}
+		if strings.HasPrefix(part, "sslmode=") {
+			sslmode = strings.TrimPrefix(part, "sslmode=")
+		}
+	}
+	return host, sslmode
 }
 
 // redactDSN returns the host portion of the DSN for diagnostics,
