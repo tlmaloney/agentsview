@@ -41,6 +41,7 @@ func ensureSchema(t *testing.T, pgURL string) {
 			agent TEXT NOT NULL,
 			first_message TEXT,
 			display_name TEXT,
+			created_at TEXT NOT NULL DEFAULT '',
 			started_at TEXT,
 			ended_at TEXT,
 			deleted_at TEXT,
@@ -81,6 +82,9 @@ func ensureSchema(t *testing.T, pgURL string) {
 	if err != nil {
 		t.Fatalf("creating schema: %v", err)
 	}
+
+	// Ensure created_at column exists (may be missing from earlier runs).
+	pg.Exec(`ALTER TABLE agentsview.sessions ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT ''`)
 
 	// Insert test data if not present.
 	var count int
