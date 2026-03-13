@@ -116,6 +116,13 @@ func (p *PGDB) GetMinimapFrom(
 // HasFTS returns true because ILIKE search is available.
 func (p *PGDB) HasFTS() bool { return true }
 
+// escapeLike escapes SQL LIKE metacharacters (%, _, \) so the
+// bind parameter is treated as a literal substring.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
 // Search performs ILIKE-based search across messages.
 func (p *PGDB) Search(
 	ctx context.Context, f db.SearchFilter,
@@ -128,7 +135,7 @@ func (p *PGDB) Search(
 		"m.content ILIKE '%' || $1 || '%'",
 		"s.deleted_at IS NULL",
 	}
-	args := []any{f.Query}
+	args := []any{escapeLike(f.Query)}
 	argIdx := 2
 
 	if f.Project != "" {

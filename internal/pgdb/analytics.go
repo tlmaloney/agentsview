@@ -195,6 +195,11 @@ const pgDateColS = "COALESCE(NULLIF(s.started_at, ''), '')"
 
 // filteredSessionIDs returns the set of session IDs that have
 // at least one message matching the hour/dow filter.
+// Note: this joins sessions x messages and streams all rows
+// client-side for time-of-day filtering. This is acceptable for
+// the expected scale (thousands of sessions, tens of thousands
+// of messages). For significantly larger datasets, push the
+// EXTRACT(HOUR/DOW) filters into the SQL query.
 func (p *PGDB) filteredSessionIDs(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (map[string]bool, error) {
@@ -475,7 +480,9 @@ func (p *PGDB) GetAnalyticsActivity(
 			buckets[bucket] = entry
 		}
 
-		// Count this session once per bucket
+		// Count this session once globally (first bucket wins).
+		// Sessions spanning midnight are attributed to a single
+		// bucket to match the SQLite implementation.
 		if _, seen := sessionSeen[sid]; !seen {
 			sessionSeen[sid] = bucket
 			sessionIDs = append(sessionIDs, sid)

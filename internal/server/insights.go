@@ -140,6 +140,12 @@ func insightGenerateClientMessage(agent string) string {
 func (s *Server) handleGenerateInsight(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"insight generation is not available in read-only mode")
+		return
+	}
+
 	var req generateInsightRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest,

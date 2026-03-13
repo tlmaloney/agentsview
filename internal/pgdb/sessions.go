@@ -152,9 +152,11 @@ func (p *PGDB) EncodeCursor(endedAt, id string, total ...int) string {
 	data, _ := json.Marshal(c)
 
 	p.cursorMu.RLock()
-	mac := hmac.New(sha256.New, p.cursorSecret)
+	secret := make([]byte, len(p.cursorSecret))
+	copy(secret, p.cursorSecret)
 	p.cursorMu.RUnlock()
 
+	mac := hmac.New(sha256.New, secret)
 	mac.Write(data)
 	sig := mac.Sum(nil)
 
@@ -194,9 +196,11 @@ func (p *PGDB) DecodeCursor(s string) (db.SessionCursor, error) {
 	}
 
 	p.cursorMu.RLock()
-	mac := hmac.New(sha256.New, p.cursorSecret)
+	secret := make([]byte, len(p.cursorSecret))
+	copy(secret, p.cursorSecret)
 	p.cursorMu.RUnlock()
 
+	mac := hmac.New(sha256.New, secret)
 	mac.Write(data)
 	expectedSig := mac.Sum(nil)
 
