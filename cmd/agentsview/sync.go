@@ -150,6 +150,7 @@ func runPGSync(
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	var pushErrors int
 	if cfg.PG {
 		if err := ps.EnsureSchema(ctx); err != nil {
 			fatal("pg sync schema: %v", err)
@@ -164,9 +165,7 @@ func runPGSync(
 			result.MessagesPushed,
 			result.Duration.Round(time.Millisecond),
 		)
-		if result.Errors > 0 {
-			fatal("pg sync: %d session(s) failed to push", result.Errors)
-		}
+		pushErrors = result.Errors
 	}
 
 	if cfg.PGStatus {
@@ -178,6 +177,10 @@ func runPGSync(
 		fmt.Printf("Last push:   %s\n", valueOrNever(status.LastPushAt))
 		fmt.Printf("PG sessions: %d\n", status.PGSessions)
 		fmt.Printf("PG messages: %d\n", status.PGMessages)
+	}
+
+	if pushErrors > 0 {
+		fatal("pg sync: %d session(s) failed to push", pushErrors)
 	}
 }
 
