@@ -18,6 +18,7 @@ import (
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
+	"github.com/wesm/agentsview/internal/pgdb"
 	"github.com/wesm/agentsview/internal/pgsync"
 	"github.com/wesm/agentsview/internal/server"
 	"github.com/wesm/agentsview/internal/sync"
@@ -91,6 +92,8 @@ Server flags:
   -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
   -tls-key string     TLS key path for managed Caddy HTTPS mode
   -allowed-subnet str Client CIDR allowed to connect to the managed proxy
+  -no-browser         Don't open browser on startup
+  -pg-read string     PostgreSQL URL for read-only mode
 
 Sync flags:
   -full              Force a full resync regardless of data version
@@ -123,6 +126,7 @@ Environment variables:
   AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
   AGENTSVIEW_PG_MACHINE   Machine name for PG sync
   AGENTSVIEW_PG_INTERVAL  PG sync interval (e.g. "1h", "30m")
+  AGENTSVIEW_PG_READ      PostgreSQL URL for read-only server mode
 
 Watcher excludes:
   Add "watch_exclude_patterns" to ~/.agentsview/config.json to skip
@@ -175,6 +179,12 @@ func runServe(args []string) {
 	if err := validateServeConfig(cfg); err != nil {
 		fatal("invalid serve config: %v", err)
 	}
+
+	if cfg.PGReadURL != "" {
+		runServePGRead(cfg, start)
+		return
+	}
+
 	database := mustOpenDB(cfg)
 	defer database.Close()
 
@@ -667,5 +677,53 @@ func startUnwatchedPoll(engine *sync.Engine) {
 	for range ticker.C {
 		log.Println("Polling unwatched directories...")
 		engine.SyncAll(context.Background(), nil)
+	}
+}
+
+// runServePGRead starts the HTTP server in read-only PG mode.
+// No local SQLite, sync engine, or file watcher is used.
+func runServePGRead(cfg config.Config, start time.Time) {
+	store, err := pgdb.New(cfg.PGReadURL)
+	if err != nil {
+		fatal("pg read: %v", err)
+	}
+	defer store.Close()
+
+	if cfg.CursorSecret != "" {
+		secret, decErr := base64.StdEncoding.DecodeString(
+			cfg.CursorSecret,
+		)
+		if decErr != nil {
+			fatal("invalid cursor secret: %v", decErr)
+		}
+		store.SetCursorSecret(secret)
+	}
+
+	port := server.FindAvailablePort(cfg.Host, cfg.Port)
+	if port != cfg.Port {
+		fmt.Printf("Port %d in use, using %d\n", cfg.Port, port)
+	}
+	cfg.Port = port
+
+	srv := server.New(cfg, store, nil,
+		server.WithVersion(server.VersionInfo{
+			Version:   version,
+			Commit:    commit,
+			BuildDate: buildDate,
+			ReadOnly:  true,
+		}),
+		server.WithDataDir(cfg.DataDir),
+	)
+
+	url := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	fmt.Printf(
+		"agentsview %s listening at %s (pg read-only, started in %s)\n",
+		version, url,
+		time.Since(start).Round(time.Millisecond),
+	)
+
+	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
+		fatal("server error: %v", err)
 	}
 }

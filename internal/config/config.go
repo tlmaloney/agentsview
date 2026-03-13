@@ -75,6 +75,7 @@ type Config struct {
 	Terminal             TerminalConfig `json:"terminal,omitempty"`
 	AuthToken            string         `json:"auth_token,omitempty"`
 	RemoteAccess         bool           `json:"remote_access"`
+	NoBrowser            bool           `json:"no_browser"`
 	PGSync               PGSyncConfig   `json:"pg_sync,omitempty"`
 	WriteTimeout         time.Duration  `json:"-"`
 
@@ -93,6 +94,10 @@ type Config struct {
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
 	HostExplicit bool `json:"-"`
+
+	// PGReadURL, when set, switches the server to read-only mode
+	// backed by a PostgreSQL database instead of the local SQLite.
+	PGReadURL string `json:"-"`
 }
 
 type dirSource int
@@ -360,6 +365,9 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_PG_INTERVAL"); v != "" {
 		c.PGSync.Interval = v
 	}
+	if v := os.Getenv("AGENTSVIEW_PG_READ"); v != "" {
+		c.PGReadURL = v
+	}
 }
 
 type stringListFlag []string
@@ -426,6 +434,8 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"no-browser", false,
 		"Don't open browser on startup",
 	)
+	fs.String("pg-read", "",
+		"PostgreSQL URL for read-only mode (overrides AGENTSVIEW_PG_READ)")
 }
 
 // applyFlags copies explicitly-set flags from fs into cfg.
@@ -459,6 +469,10 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 			cfg.Proxy.TLSKey = f.Value.String()
 		case "allowed-subnet":
 			cfg.Proxy.AllowedSubnets = splitFlagList(f.Value.String())
+		case "no-browser":
+			cfg.NoBrowser = f.Value.String() == "true"
+		case "pg-read":
+			cfg.PGReadURL = f.Value.String()
 		}
 	})
 }

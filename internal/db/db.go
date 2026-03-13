@@ -79,6 +79,9 @@ func (db *DB) Path() string {
 	return db.path
 }
 
+// ReadOnly returns false for the local SQLite store.
+func (db *DB) ReadOnly() bool { return false }
+
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {
 	db.cursorMu.Lock()

@@ -52,6 +52,12 @@ func (s *Server) sessionMonitor(
 	go func() {
 		defer close(ch)
 
+		if s.engine == nil {
+			// PG read mode: no file watching.
+			<-ctx.Done()
+			return
+		}
+
 		// Seed initial state from the database.
 		lastCount, lastDBMtime, _ := s.db.GetSessionVersion(
 			sessionID,
@@ -215,6 +221,11 @@ func (s *Server) handleWatchSession(
 func (s *Server) handleTriggerSync(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.engine == nil {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	stream, err := NewSSEStream(w)
 	if err != nil {
 		// Non-streaming fallback
@@ -232,6 +243,11 @@ func (s *Server) handleTriggerSync(
 func (s *Server) handleTriggerResync(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.engine == nil {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	stream, err := NewSSEStream(w)
 	if err != nil {
 		stats := s.engine.ResyncAll(r.Context(), nil)
@@ -248,6 +264,13 @@ func (s *Server) handleTriggerResync(
 func (s *Server) handleSyncStatus(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.engine == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"last_sync": "",
+			"stats":     nil,
+		})
+		return
+	}
 	lastSync := s.engine.LastSync()
 	stats := s.engine.LastSyncStats()
 

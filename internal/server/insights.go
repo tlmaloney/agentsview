@@ -112,6 +112,9 @@ func (s *Server) handleDeleteInsight(
 	}
 
 	if err := s.db.DeleteInsight(id); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		writeError(
 			w, http.StatusInternalServerError, err.Error(),
 		)

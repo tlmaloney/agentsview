@@ -199,6 +199,9 @@ func (s *Server) handleUploadSession(
 
 	for _, pr := range results {
 		if err := s.saveSessionToDB(pr.Session, pr.Messages); err != nil {
+			if handleReadOnly(w, err) {
+				return
+			}
 			log.Printf("Error saving session to DB: %v", err)
 			writeError(w, http.StatusInternalServerError,
 				"failed to save session to database")
