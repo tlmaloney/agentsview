@@ -280,7 +280,7 @@ func (p *PGDB) ListSessions(
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
-		ea := ""
+		ea := last.CreatedAt
 		if last.StartedAt != nil && *last.StartedAt != "" {
 			ea = *last.StartedAt
 		}

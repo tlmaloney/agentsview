@@ -1408,7 +1408,7 @@ func (p *PGDB) queryVelocityMsgs(
 	pb := &paramBuilder{}
 	ph := pgInPlaceholders(chunk, pb)
 	q := `SELECT session_id, ordinal, role,
-		timestamp, content_length
+		COALESCE(timestamp, ''), content_length
 		FROM agentsview.messages
 		WHERE session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`
@@ -1813,7 +1813,7 @@ func (p *PGDB) GetAnalyticsTopSessions(
 		first_message, message_count,
 		started_at, ended_at
 		FROM agentsview.sessions WHERE ` + where +
-		` ORDER BY ` + orderExpr + ` LIMIT 200`
+		` ORDER BY ` + orderExpr + ` LIMIT 1000`
 
 	rows, err := p.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {

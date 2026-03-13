@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -13,15 +14,26 @@ import (
 // Compile-time check: *PGDB satisfies db.Store.
 var _ db.Store = (*PGDB)(nil)
 
+// redactDSN returns a version of the DSN with the password removed.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "<redacted>"
+	}
+	return u.Redacted()
+}
+
 // New opens a PostgreSQL connection and returns a PGDB.
 func New(pgURL string) (*PGDB, error) {
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
-		return nil, fmt.Errorf("opening pg: %w", err)
+		return nil, fmt.Errorf("opening pg (%s): %w",
+			redactDSN(pgURL), err)
 	}
 	if err := pg.Ping(); err != nil {
 		pg.Close()
-		return nil, fmt.Errorf("pg ping: %w", err)
+		return nil, fmt.Errorf("pg ping (%s): %w",
+			redactDSN(pgURL), err)
 	}
 	pg.SetMaxOpenConns(4)
 	return &PGDB{pg: pg}, nil

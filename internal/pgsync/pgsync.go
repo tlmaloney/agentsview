@@ -5,12 +5,22 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/url"
 	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/wesm/agentsview/internal/db"
 )
+
+// redactDSN returns a version of the DSN with the password removed.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "<redacted>"
+	}
+	return u.Redacted()
+}
 
 // PGSync manages push-only sync from local SQLite to a remote
 // PostgreSQL database.
@@ -50,7 +60,8 @@ func New(
 	}
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
-		return nil, fmt.Errorf("opening pg connection: %w", err)
+		return nil, fmt.Errorf("opening pg connection (%s): %w",
+			redactDSN(pgURL), err)
 	}
 	pg.SetMaxOpenConns(5)
 	pg.SetMaxIdleConns(5)
@@ -63,7 +74,8 @@ func New(
 	defer cancel()
 	if err := pg.PingContext(ctx); err != nil {
 		pg.Close()
-		return nil, fmt.Errorf("pg ping failed: %w", err)
+		return nil, fmt.Errorf("pg ping failed (%s): %w",
+			redactDSN(pgURL), err)
 	}
 
 	return &PGSync{
