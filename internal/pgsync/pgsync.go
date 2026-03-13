@@ -48,15 +48,42 @@ func parseSSLParams(dsn string) (host, sslmode string) {
 		return u.Hostname(), u.Query().Get("sslmode")
 	}
 	// Key-value format: host=... sslmode=...
-	for _, part := range strings.Fields(dsn) {
-		if strings.HasPrefix(part, "host=") {
-			host = strings.TrimPrefix(part, "host=")
-		}
-		if strings.HasPrefix(part, "sslmode=") {
-			sslmode = strings.TrimPrefix(part, "sslmode=")
-		}
+	host = kvParam(dsn, "host")
+	sslmode = kvParam(dsn, "sslmode")
+	// Unix-socket paths (host=/var/run/...) are local; treat as
+	// loopback so the warning is not triggered.
+	if strings.HasPrefix(host, "/") {
+		host = ""
 	}
 	return host, sslmode
+}
+
+// kvParam extracts a key-value parameter from a libpq-style DSN.
+// Handles optional quoting (key='value with spaces').
+func kvParam(dsn, key string) string {
+	prefix := key + "="
+	idx := strings.Index(dsn, prefix)
+	if idx < 0 {
+		return ""
+	}
+	// Ensure we matched a full key (not a substring like "hostaddr=").
+	if idx > 0 && dsn[idx-1] != ' ' && dsn[idx-1] != '\t' {
+		return ""
+	}
+	val := dsn[idx+len(prefix):]
+	if len(val) > 0 && val[0] == '\'' {
+		// Quoted value: find closing quote.
+		end := strings.IndexByte(val[1:], '\'')
+		if end >= 0 {
+			return val[1 : end+1]
+		}
+		return val[1:]
+	}
+	// Unquoted: take until next whitespace.
+	if end := strings.IndexAny(val, " \t"); end >= 0 {
+		return val[:end]
+	}
+	return val
 }
 
 // redactDSN returns the host portion of the DSN for diagnostics,

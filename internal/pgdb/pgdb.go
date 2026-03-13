@@ -50,15 +50,42 @@ func parseSSLParams(dsn string) (host, sslmode string) {
 		return u.Hostname(), u.Query().Get("sslmode")
 	}
 	// Key-value format: host=... sslmode=...
-	for _, part := range strings.Fields(dsn) {
-		if strings.HasPrefix(part, "host=") {
-			host = strings.TrimPrefix(part, "host=")
-		}
-		if strings.HasPrefix(part, "sslmode=") {
-			sslmode = strings.TrimPrefix(part, "sslmode=")
-		}
+	host = kvParam(dsn, "host")
+	sslmode = kvParam(dsn, "sslmode")
+	// Unix-socket paths (host=/var/run/...) are local; treat as
+	// loopback so the warning is not triggered.
+	if strings.HasPrefix(host, "/") {
+		host = ""
 	}
 	return host, sslmode
+}
+
+// kvParam extracts a key-value parameter from a libpq-style DSN.
+// Handles optional quoting (key='value with spaces').
+func kvParam(dsn, key string) string {
+	prefix := key + "="
+	idx := strings.Index(dsn, prefix)
+	if idx < 0 {
+		return ""
+	}
+	// Ensure we matched a full key (not a substring like "hostaddr=").
+	if idx > 0 && dsn[idx-1] != ' ' && dsn[idx-1] != '\t' {
+		return ""
+	}
+	val := dsn[idx+len(prefix):]
+	if len(val) > 0 && val[0] == '\'' {
+		// Quoted value: find closing quote.
+		end := strings.IndexByte(val[1:], '\'')
+		if end >= 0 {
+			return val[1 : end+1]
+		}
+		return val[1:]
+	}
+	// Unquoted: take until next whitespace.
+	if end := strings.IndexAny(val, " \t"); end >= 0 {
+		return val[:end]
+	}
+	return val
 }
 
 // New opens a PostgreSQL connection and returns a PGDB.
@@ -192,18 +219,27 @@ func (p *PGDB) ReplaceSessionMessages(_ string, _ []db.Message) error {
 	return db.ErrReadOnly
 }
 
-// GetSessionVersion returns the message count for SSE change
-// detection. PG has no file_mtime so it returns 0 for that field.
-// This allows the /watch endpoint to detect when new messages are
-// pushed to PG by another machine.
+// GetSessionVersion returns the message count and a hash of
+// updated_at for SSE change detection. The updated_at hash
+// serves as a version signal for metadata-only changes
+// (renames, deletes, display name updates) that don't change
+// message_count.
 func (p *PGDB) GetSessionVersion(id string) (int, int64, bool) {
 	var count int
+	var updatedAt string
 	err := p.pg.QueryRow(
-		"SELECT message_count FROM agentsview.sessions WHERE id = $1",
+		`SELECT message_count, COALESCE(updated_at, '')
+		 FROM agentsview.sessions WHERE id = $1`,
 		id,
-	).Scan(&count)
+	).Scan(&count, &updatedAt)
 	if err != nil {
 		return 0, 0, false
 	}
-	return count, 0, true
+	// Use a simple hash of updated_at as the mtime-equivalent
+	// signal. The SSE watcher compares this value across polls.
+	var h int64
+	for _, c := range updatedAt {
+		h = h*31 + int64(c)
+	}
+	return count, h, true
 }
