@@ -135,12 +135,12 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 		return result, nil
 	}
 
-	// NOTE: If any session push fails, we return without updating
-	// last_push_at. Sessions successfully pushed earlier in the loop
-	// will be re-pushed on the next cycle. Each per-session PG
-	// transaction commits individually so PG state is consistent;
-	// the redundant work is benign since pushSession and pushMessages
-	// use upserts.
+	// Each session gets its own PG transaction. If pushMessages
+	// fails for a session, we roll back that transaction, log the
+	// error, and continue. Only successfully committed sessions
+	// are recorded in boundary state so failed ones are retried
+	// on the next push cycle.
+	var pushed []db.Session
 	for _, s := range sessions {
 		tx, err := p.pg.BeginTx(ctx, nil)
 		if err != nil {
@@ -183,11 +183,12 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 			return result, fmt.Errorf("commit pg tx: %w", err)
 		}
 
+		pushed = append(pushed, s)
 		result.SessionsPushed++
 		result.MessagesPushed += msgCount
 	}
 
-	if err := finalizePushState(p.local, cutoff, sessions); err != nil {
+	if err := finalizePushState(p.local, cutoff, pushed); err != nil {
 		return result, err
 	}
 

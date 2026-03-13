@@ -467,7 +467,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
 	}
 
 	// Sleep briefly so the timestamp changes.
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Full push (forces message rewrite even though content unchanged).
 	result, err := ps.Push(ctx, true)
