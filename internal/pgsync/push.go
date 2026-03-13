@@ -149,9 +149,9 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 
 		if err := p.pushSession(ctx, tx, s); err != nil {
 			_ = tx.Rollback()
-			return result, fmt.Errorf(
-				"upserting session %s: %w", s.ID, err,
-			)
+			log.Printf("pgsync: skipping session %s: %v", s.ID, err)
+			result.Errors++
+			continue
 		}
 
 		msgCount, err := p.pushMessages(ctx, tx, s.ID, full)
