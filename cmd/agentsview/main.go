@@ -719,13 +719,15 @@ func runServePGRead(cfg config.Config, start time.Time) {
 	}
 	defer store.Close()
 
-	// Ensure the PG schema is up to date so pg-read works even
-	// against databases from older sync builds that may lack
-	// recent columns (e.g. created_at).
+	// Best-effort schema migration so pg-read works against
+	// databases from older sync builds that may lack recent
+	// columns. Non-fatal: read-only PG roles and hot standbys
+	// will reject DDL, which is fine — the schema is already
+	// current if a writer has been running.
 	if err := pgsync.EnsureSchemaDB(
 		context.Background(), store.DB(),
 	); err != nil {
-		fatal("pg read schema migration: %v", err)
+		log.Printf("pg read: schema migration skipped (read-only connection?): %v", err)
 	}
 
 	if cfg.CursorSecret != "" {
