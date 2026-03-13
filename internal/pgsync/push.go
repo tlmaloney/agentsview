@@ -173,14 +173,16 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 				s.ID,
 			); err != nil {
 				_ = tx.Rollback()
-				return result, fmt.Errorf(
-					"bumping updated_at for %s: %w", s.ID, err,
-				)
+				log.Printf("pgsync: skipping session %s: %v", s.ID, err)
+				result.Errors++
+				continue
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			return result, fmt.Errorf("commit pg tx: %w", err)
+			log.Printf("pgsync: skipping session %s: commit: %v", s.ID, err)
+			result.Errors++
+			continue
 		}
 
 		pushed = append(pushed, s)

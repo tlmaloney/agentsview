@@ -222,9 +222,6 @@ func (p *PGDB) filteredSessionIDs(
 
 	ids := make(map[string]bool)
 	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		var sid, msgTS string
 		if err := rows.Scan(&sid, &msgTS); err != nil {
 			return nil, fmt.Errorf(
