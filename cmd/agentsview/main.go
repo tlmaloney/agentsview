@@ -682,7 +682,19 @@ func startUnwatchedPoll(engine *sync.Engine) {
 
 // runServePGRead starts the HTTP server in read-only PG mode.
 // No local SQLite, sync engine, or file watcher is used.
+// Features that require local state (proxy, remote access, PG
+// push sync) are not available in this mode.
 func runServePGRead(cfg config.Config, start time.Time) {
+	if cfg.RemoteAccess {
+		log.Println("warning: remote_access is ignored in pg-read mode")
+	}
+	if cfg.Proxy.Mode != "" {
+		log.Println("warning: proxy config is ignored in pg-read mode")
+	}
+	if cfg.PGSync.PostgresURL != "" {
+		log.Println("warning: pg_sync config is ignored in pg-read mode")
+	}
+
 	store, err := pgdb.New(cfg.PGReadURL)
 	if err != nil {
 		fatal("pg read: %v", err)
