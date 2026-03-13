@@ -92,7 +92,7 @@ func buildAnalyticsWhere(f db.AnalyticsFilter, dateCol string, pb *paramBuilder)
 		preds = append(preds, "user_message_count > 1")
 	}
 	if f.ActiveSince != "" {
-		preds = append(preds, "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), '') >= "+pb.add(f.ActiveSince))
+		preds = append(preds, "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= "+pb.add(f.ActiveSince))
 	}
 	return strings.Join(preds, " AND ")
 }
@@ -186,12 +186,12 @@ func matchesTimeFilter(f db.AnalyticsFilter, t time.Time) bool {
 	return true
 }
 
-// pgDateCol is the date column expression for PG analytics queries
-// on the sessions table (no table prefix).
-const pgDateCol = "COALESCE(NULLIF(started_at, ''), '')"
+// pgDateCol is the date column expression for PG analytics queries,
+// matching SQLite's COALESCE(NULLIF(started_at, ”), created_at).
+const pgDateCol = "COALESCE(NULLIF(started_at, ''), created_at)"
 
 // pgDateColS is the date column expression with "s." table prefix.
-const pgDateColS = "COALESCE(NULLIF(s.started_at, ''), '')"
+const pgDateColS = "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
 
 // filteredSessionIDs returns the set of session IDs that have
 // at least one message matching the hour/dow filter.
@@ -645,7 +645,7 @@ func buildDateEntries(
 		return nil
 	}
 
-	var entries []db.HeatmapEntry
+	entries := []db.HeatmapEntry{}
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		date := d.Format("2006-01-02")
 		v := values[date]
@@ -1822,7 +1822,7 @@ func (p *PGDB) GetAnalyticsTopSessions(
 	}
 	defer rows.Close()
 
-	var sessions []db.TopSession
+	sessions := []db.TopSession{}
 	for rows.Next() {
 		var id, ts, project string
 		var firstMsg, startedAt, endedAt *string

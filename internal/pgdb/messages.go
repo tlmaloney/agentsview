@@ -99,7 +99,7 @@ func (p *PGDB) GetMinimapFrom(
 	}
 	defer rows.Close()
 
-	var entries []db.MinimapEntry
+	entries := []db.MinimapEntry{}
 	for rows.Next() {
 		var e db.MinimapEntry
 		if err := rows.Scan(
@@ -123,6 +123,17 @@ func escapeLike(s string) string {
 	return r.Replace(s)
 }
 
+// stripFTSQuotes removes the surrounding double quotes that
+// prepareFTSQuery adds for SQLite FTS phrase matching. PG uses
+// ILIKE which treats literal quotes as content characters, so
+// they must be stripped.
+func stripFTSQuotes(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
 // Search performs ILIKE-based search across messages.
 func (p *PGDB) Search(
 	ctx context.Context, f db.SearchFilter,
@@ -131,11 +142,13 @@ func (p *PGDB) Search(
 		f.Limit = db.DefaultSearchLimit
 	}
 
+	searchTerm := stripFTSQuotes(f.Query)
+
 	whereClauses := []string{
 		"m.content ILIKE '%' || $1 || '%'",
 		"s.deleted_at IS NULL",
 	}
-	args := []any{escapeLike(f.Query)}
+	args := []any{escapeLike(searchTerm)}
 	argIdx := 2
 
 	if f.Project != "" {
@@ -172,7 +185,7 @@ func (p *PGDB) Search(
 	}
 	defer rows.Close()
 
-	var results []db.SearchResult
+	results := []db.SearchResult{}
 	for rows.Next() {
 		var r db.SearchResult
 		if err := rows.Scan(
@@ -294,7 +307,7 @@ func scanPGMessages(rows interface {
 	Err() error
 },
 ) ([]db.Message, error) {
-	var msgs []db.Message
+	msgs := []db.Message{}
 	for rows.Next() {
 		var m db.Message
 		if err := rows.Scan(

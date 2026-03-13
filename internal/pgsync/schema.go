@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS agentsview.sessions (
     agent              TEXT NOT NULL,
     first_message      TEXT,
     display_name       TEXT,
+    created_at         TEXT NOT NULL DEFAULT '',
     started_at         TEXT,
     ended_at           TEXT,
     deleted_at         TEXT,
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS agentsview.sessions (
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
     relationship_type  TEXT NOT NULL DEFAULT '',
-    updated_at         TEXT NOT NULL DEFAULT ` + pgTimestampSQL("NOW() AT TIME ZONE 'UTC'") + `
+    updated_at         TEXT NOT NULL DEFAULT` + pgTimestampSQL("NOW() AT TIME ZONE 'UTC'") + `
 );
 
 CREATE TABLE IF NOT EXISTS agentsview.messages (
@@ -87,6 +88,12 @@ func ensureSchema(ctx context.Context, pg *sql.DB) error {
 		ADD COLUMN IF NOT EXISTS deleted_at TEXT
 	`); err != nil {
 		return fmt.Errorf("adding sessions.deleted_at: %w", err)
+	}
+	if _, err := pg.ExecContext(ctx, `
+		ALTER TABLE agentsview.sessions
+		ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT ''
+	`); err != nil {
+		return fmt.Errorf("adding sessions.created_at: %w", err)
 	}
 	if _, err := pg.ExecContext(ctx, `
 		ALTER TABLE agentsview.tool_calls

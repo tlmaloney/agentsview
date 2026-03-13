@@ -22,10 +22,10 @@ type PGDB struct {
 }
 
 // pgSessionCols is the column list for standard PG session queries.
-// PG has no created_at, file_path, file_size, file_mtime, file_hash,
+// PG has no file_path, file_size, file_mtime, file_hash,
 // or local_modified_at columns.
 const pgSessionCols = `id, project, machine, agent,
-	first_message, display_name, started_at, ended_at,
+	first_message, display_name, created_at, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type, deleted_at`
 
@@ -46,15 +46,11 @@ func scanPGSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	var s db.Session
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
+		&s.FirstMessage, &s.DisplayName, &s.CreatedAt, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.DeletedAt,
 	)
-	// Set CreatedAt from started_at since PG has no created_at column.
-	if s.StartedAt != nil && *s.StartedAt != "" {
-		s.CreatedAt = *s.StartedAt
-	}
 	return s, err
 }
 
@@ -112,19 +108,19 @@ func buildPGSessionFilter(f db.SessionFilter) (string, []any) {
 	}
 	if f.Date != "" {
 		preds = append(preds,
-			"SUBSTRING(COALESCE(NULLIF(started_at, ''), '') FROM 1 FOR 10) = "+pb.add(f.Date))
+			"SUBSTRING(COALESCE(NULLIF(started_at, ''), created_at) FROM 1 FOR 10) = "+pb.add(f.Date))
 	}
 	if f.DateFrom != "" {
 		preds = append(preds,
-			"SUBSTRING(COALESCE(NULLIF(started_at, ''), '') FROM 1 FOR 10) >= "+pb.add(f.DateFrom))
+			"SUBSTRING(COALESCE(NULLIF(started_at, ''), created_at) FROM 1 FOR 10) >= "+pb.add(f.DateFrom))
 	}
 	if f.DateTo != "" {
 		preds = append(preds,
-			"SUBSTRING(COALESCE(NULLIF(started_at, ''), '') FROM 1 FOR 10) <= "+pb.add(f.DateTo))
+			"SUBSTRING(COALESCE(NULLIF(started_at, ''), created_at) FROM 1 FOR 10) <= "+pb.add(f.DateTo))
 	}
 	if f.ActiveSince != "" {
 		preds = append(preds,
-			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), '') >= "+pb.add(f.ActiveSince))
+			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= "+pb.add(f.ActiveSince))
 	}
 	if f.MinMessages > 0 {
 		preds = append(preds, "message_count >= "+pb.add(f.MinMessages))
@@ -254,7 +250,7 @@ func (p *PGDB) ListSessions(
 		endedAtParam := cursorPB.add(cur.EndedAt)
 		idParam := cursorPB.add(cur.ID)
 		cursorWhere += ` AND (
-			COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), ''), id
+			COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at), id
 		) < (` + endedAtParam + `, ` + idParam + `)`
 	}
 
@@ -264,7 +260,7 @@ func (p *PGDB) ListSessions(
 		ORDER BY COALESCE(
 			NULLIF(ended_at, ''),
 			NULLIF(started_at, ''),
-			''
+			created_at
 		) DESC, id DESC
 		LIMIT ` + limitParam
 
@@ -348,7 +344,7 @@ func (p *PGDB) GetChildSessions(
 ) ([]db.Session, error) {
 	query := "SELECT " + pgSessionCols +
 		" FROM agentsview.sessions WHERE parent_session_id = $1 AND deleted_at IS NULL" +
-		" ORDER BY COALESCE(NULLIF(started_at, ''), '') ASC"
+		" ORDER BY COALESCE(NULLIF(started_at, ''), created_at) ASC"
 	rows, err := p.pg.QueryContext(ctx, query, parentID)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -379,7 +375,7 @@ func (p *PGDB) GetStats(
 			 WHERE %s),
 			(SELECT COUNT(DISTINCT machine) FROM agentsview.sessions
 			 WHERE %s),
-			(SELECT MIN(COALESCE(NULLIF(started_at, ''), ''))
+			(SELECT MIN(COALESCE(NULLIF(started_at, ''), created_at))
 			 FROM agentsview.sessions
 			 WHERE %s)`,
 		filter, filter, filter, filter, filter)
@@ -417,7 +413,7 @@ func (p *PGDB) GetProjects(
 	}
 	defer rows.Close()
 
-	var projects []db.ProjectInfo
+	projects := []db.ProjectInfo{}
 	for rows.Next() {
 		var pi db.ProjectInfo
 		if err := rows.Scan(&pi.Name, &pi.SessionCount); err != nil {
@@ -473,7 +469,7 @@ func (p *PGDB) GetMachines(
 	}
 	defer rows.Close()
 
-	var machines []string
+	machines := []string{}
 	for rows.Next() {
 		var m string
 		if err := rows.Scan(&m); err != nil {

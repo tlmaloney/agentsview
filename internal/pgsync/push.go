@@ -314,17 +314,18 @@ func (p *PGSync) pushSession(
 		INSERT INTO agentsview.sessions (
 			id, machine, project, agent,
 			first_message, display_name,
-			started_at, ended_at, deleted_at,
+			created_at, started_at, ended_at, deleted_at,
 			message_count, user_message_count,
 			parent_session_id, relationship_type,
 			updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, `+pgTimestampSQL("NOW() AT TIME ZONE 'UTC'")+`)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, `+pgTimestampSQL("NOW() AT TIME ZONE 'UTC'")+`)
 		ON CONFLICT (id) DO UPDATE SET
 			machine = EXCLUDED.machine,
 			project = EXCLUDED.project,
 			agent = EXCLUDED.agent,
 			first_message = EXCLUDED.first_message,
 			display_name = EXCLUDED.display_name,
+			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
 			ended_at = EXCLUDED.ended_at,
 			deleted_at = EXCLUDED.deleted_at,
@@ -338,6 +339,7 @@ func (p *PGSync) pushSession(
 			OR agentsview.sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR agentsview.sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
 			OR agentsview.sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
+			OR agentsview.sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
 			OR agentsview.sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR agentsview.sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
 			OR agentsview.sessions.deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
@@ -347,7 +349,7 @@ func (p *PGSync) pushSession(
 			OR agentsview.sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type`,
 		s.ID, p.machine, s.Project, s.Agent,
 		nilStr(s.FirstMessage), nilStr(s.DisplayName),
-		nilStr(s.StartedAt), nilStr(s.EndedAt), nilStr(s.DeletedAt),
+		s.CreatedAt, nilStr(s.StartedAt), nilStr(s.EndedAt), nilStr(s.DeletedAt),
 		s.MessageCount, s.UserMessageCount,
 		nilStr(s.ParentSessionID), s.RelationshipType,
 	)
@@ -408,9 +410,11 @@ func (p *PGSync) pushMessages(
 	// all match we assume the session is unchanged. Skipped when
 	// full=true.
 	//
-	// Known limitation: this can produce false negatives when message
-	// content changes without affecting content_length statistics
-	// (e.g. rewritten to different text of the same byte length).
+	// Known limitation: this heuristic uses aggregate length
+	// statistics rather than content hashes, so it can produce
+	// false negatives when message content is rewritten to
+	// different text of identical byte length. In practice this
+	// is extremely rare since agent sessions are append-only.
 	// Use -full to force a complete re-push when needed.
 	if !full && pgCount == localCount && pgCount > 0 {
 		localSum, localMax, localMin, err := p.local.MessageContentFingerprint(sessionID)
