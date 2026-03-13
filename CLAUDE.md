@@ -78,6 +78,19 @@ make lint       # golangci-lint
 make vet        # go vet
 ```
 
+### PostgreSQL Integration Tests
+
+PG integration tests require a real PostgreSQL instance and the `pgtest`
+build tag. Set `TEST_PG_URL` to a valid connection string:
+
+```bash
+TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
+  CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/pgsync/... -v
+```
+
+Tests create and drop the `agentsview` schema, so use a dedicated
+database or one where schema changes are acceptable.
+
 ### Test Guidelines
 
 - Table-driven tests for Go code

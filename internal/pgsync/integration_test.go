@@ -4,21 +4,17 @@ package pgsync
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/wesm/agentsview/internal/db"
 )
 
-func TestOlympusConnectivity(t *testing.T) {
-	pgURL := os.Getenv("OLYMPUS_PG_URL")
-	if pgURL == "" {
-		pgURL = "postgres://postgres:secret@olympus/postgres?sslmode=disable"
-	}
+func TestPGConnectivity(t *testing.T) {
+	pgURL := testPGURL(t)
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "olympus-test-machine", time.Hour)
+	ps, err := New(pgURL, local, "connectivity-test-machine", time.Hour)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -36,14 +32,11 @@ func TestOlympusConnectivity(t *testing.T) {
 		t.Fatalf("get status: %v", err)
 	}
 
-	t.Logf("Olympus Sync Status: %+v", status)
+	t.Logf("PG Sync Status: %+v", status)
 }
 
-func TestOlympusPushCycle(t *testing.T) {
-	pgURL := os.Getenv("OLYMPUS_PG_URL")
-	if pgURL == "" {
-		pgURL = "postgres://postgres:secret@olympus/postgres?sslmode=disable"
-	}
+func TestPGPushCycle(t *testing.T) {
+	pgURL := testPGURL(t)
 
 	// Clean up schema before starting
 	cleanPGSchema(t, pgURL)
@@ -63,10 +56,10 @@ func TestOlympusPushCycle(t *testing.T) {
 
 	// Create a session and message
 	started := time.Now().UTC().Format(time.RFC3339)
-	firstMsg := "hello from olympus"
+	firstMsg := "hello from pg"
 	sess := db.Session{
-		ID:           "olympus-sess-001",
-		Project:      "olympus-project",
+		ID:           "pg-sess-001",
+		Project:      "pg-project",
 		Machine:      "local",
 		Agent:        "test-agent",
 		FirstMessage: &firstMsg,
@@ -77,7 +70,7 @@ func TestOlympusPushCycle(t *testing.T) {
 		t.Fatalf("upsert session: %v", err)
 	}
 	if err := local.InsertMessages([]db.Message{{
-		SessionID: "olympus-sess-001",
+		SessionID: "pg-sess-001",
 		Ordinal:   0,
 		Role:      "user",
 		Content:   firstMsg,
