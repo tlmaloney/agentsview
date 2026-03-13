@@ -158,9 +158,9 @@ func (p *PGDB) UnpinMessage(_ string, _ int64) error {
 	return db.ErrReadOnly
 }
 
-// ListPinnedMessages returns nil (no local pin storage).
+// ListPinnedMessages returns an empty slice (no local pin storage).
 func (p *PGDB) ListPinnedMessages(_ context.Context, _ string) ([]db.PinnedMessage, error) {
-	return nil, nil
+	return []db.PinnedMessage{}, nil
 }
 
 // InsertInsight is not supported in read-only mode.
@@ -173,9 +173,9 @@ func (p *PGDB) DeleteInsight(_ int64) error {
 	return db.ErrReadOnly
 }
 
-// ListInsights returns nil (no local insight storage).
+// ListInsights returns an empty slice (no local insight storage).
 func (p *PGDB) ListInsights(_ context.Context, _ db.InsightFilter) ([]db.Insight, error) {
-	return nil, nil
+	return []db.Insight{}, nil
 }
 
 // GetInsight returns nil (no local insight storage).
