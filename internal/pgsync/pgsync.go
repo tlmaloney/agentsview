@@ -6,12 +6,26 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/wesm/agentsview/internal/db"
 )
+
+// isUndefinedTable returns true when the error indicates the
+// queried table or schema does not exist (PG error code 42P01).
+func isUndefinedTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	// pgx wraps the PG error; check the message for the SQLSTATE
+	// code or the canonical "does not exist" phrasing.
+	msg := err.Error()
+	return strings.Contains(msg, "42P01") ||
+		strings.Contains(msg, "does not exist")
+}
 
 // redactDSN returns the host portion of the DSN for diagnostics,
 // stripping credentials, query parameters, and path components
@@ -178,6 +192,14 @@ func (p *PGSync) Status(ctx context.Context) (SyncStatus, error) {
 		"SELECT COUNT(*) FROM agentsview.sessions",
 	).Scan(&pgSessions)
 	if err != nil {
+		// Treat missing schema as empty rather than an error so
+		// that -pg-status works against an uninitialized database.
+		if isUndefinedTable(err) {
+			return SyncStatus{
+				Machine:    p.machine,
+				LastPushAt: lastPush,
+			}, nil
+		}
 		return SyncStatus{}, fmt.Errorf(
 			"counting pg sessions: %w", err,
 		)
@@ -188,6 +210,13 @@ func (p *PGSync) Status(ctx context.Context) (SyncStatus, error) {
 		"SELECT COUNT(*) FROM agentsview.messages",
 	).Scan(&pgMessages)
 	if err != nil {
+		if isUndefinedTable(err) {
+			return SyncStatus{
+				Machine:    p.machine,
+				LastPushAt: lastPush,
+				PGSessions: pgSessions,
+			}, nil
+		}
 		return SyncStatus{}, fmt.Errorf(
 			"counting pg messages: %w", err,
 		)

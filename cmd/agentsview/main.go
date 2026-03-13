@@ -176,13 +176,16 @@ func runServe(args []string) {
 	start := time.Now()
 	cfg := mustLoadConfig(args)
 	setupLogFile(cfg.DataDir)
-	if err := validateServeConfig(cfg); err != nil {
-		fatal("invalid serve config: %v", err)
-	}
 
+	// Branch to PG-read mode before proxy/caddy validation, which
+	// checks settings that are irrelevant in read-only mode.
 	if cfg.PGReadURL != "" {
 		runServePGRead(cfg, start)
 		return
+	}
+
+	if err := validateServeConfig(cfg); err != nil {
+		fatal("invalid serve config: %v", err)
 	}
 
 	database := mustOpenDB(cfg)
@@ -693,6 +696,12 @@ func runServePGRead(cfg config.Config, start time.Time) {
 	}
 	if cfg.PGSync.PostgresURL != "" {
 		log.Println("warning: pg_sync config is ignored in pg-read mode")
+	}
+
+	// PG-read mode has no auth middleware, so reject non-loopback
+	// binds to avoid exposing session data on the network.
+	if !isLoopbackHost(cfg.Host) {
+		fatal("pg-read mode requires a loopback host (127.0.0.1, localhost, ::1); got %q", cfg.Host)
 	}
 
 	store, err := pgdb.New(cfg.PGReadURL)

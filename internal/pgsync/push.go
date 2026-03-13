@@ -38,6 +38,12 @@ type PushResult struct {
 // Only sessions modified since the last push are processed.
 // When full is true, the per-message content heuristic is bypassed
 // and every candidate session's messages are re-pushed unconditionally.
+//
+// Known limitation: sessions that are permanently deleted from
+// SQLite (via prune) are not propagated as deletions to PG because
+// the local rows no longer exist at push time. Sessions soft-deleted
+// with deleted_at are synced correctly. Use a direct PG DELETE to
+// remove permanently pruned sessions from PG if needed.
 func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	start := time.Now()
 	var result PushResult
