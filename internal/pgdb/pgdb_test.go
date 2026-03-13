@@ -31,11 +31,11 @@ func ensureSchema(t *testing.T, pgURL string) {
 	defer pg.Close()
 
 	// Drop and recreate tables so the test schema is always current.
-	pg.Exec(`DROP TABLE IF EXISTS agentsview.tool_calls CASCADE`)
-	pg.Exec(`DROP TABLE IF EXISTS agentsview.messages CASCADE`)
-	pg.Exec(`DROP TABLE IF EXISTS agentsview.sessions CASCADE`)
-
 	_, err = pg.Exec(`
+		DROP TABLE IF EXISTS agentsview.tool_calls CASCADE;
+		DROP TABLE IF EXISTS agentsview.messages CASCADE;
+		DROP TABLE IF EXISTS agentsview.sessions CASCADE;
+
 		CREATE SCHEMA IF NOT EXISTS agentsview;
 
 		CREATE TABLE agentsview.sessions (
