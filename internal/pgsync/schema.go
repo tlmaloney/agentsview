@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS agentsview.sessions (
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
     relationship_type  TEXT NOT NULL DEFAULT '',
-    updated_at         TEXT NOT NULL DEFAULT` + pgTimestampSQL("NOW() AT TIME ZONE 'UTC'") + `
+    updated_at         TEXT NOT NULL DEFAULT ` + pgTimestampSQL("NOW() AT TIME ZONE 'UTC'") + `
 );
 
 CREATE TABLE IF NOT EXISTS agentsview.messages (
