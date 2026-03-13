@@ -188,7 +188,15 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 		result.MessagesPushed += msgCount
 	}
 
-	if err := finalizePushState(p.local, cutoff, pushed); err != nil {
+	// When any session failed, do not advance last_push_at so
+	// failed sessions remain in the next ListSessionsModifiedBetween
+	// window. Boundary state still records pushed sessions to avoid
+	// redundant re-pushes of successful ones.
+	finalizeCutoff := cutoff
+	if result.Errors > 0 {
+		finalizeCutoff = lastPush
+	}
+	if err := finalizePushState(p.local, finalizeCutoff, pushed); err != nil {
 		return result, err
 	}
 
