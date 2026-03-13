@@ -54,10 +54,19 @@ type ProxyConfig struct {
 
 // PGSyncConfig holds PostgreSQL sync settings.
 type PGSyncConfig struct {
-	Enabled     bool   `json:"enabled"`
+	Enabled     *bool  `json:"enabled,omitempty"`
 	PostgresURL string `json:"postgres_url"`
 	Interval    string `json:"interval"`
 	MachineName string `json:"machine_name"`
+}
+
+// IsEnabled returns whether PG sync is enabled. When Enabled is nil
+// (not explicitly set), it defaults to true if PostgresURL is set.
+func (p PGSyncConfig) IsEnabled() bool {
+	if p.Enabled != nil {
+		return *p.Enabled
+	}
+	return p.PostgresURL != ""
 }
 
 // Config holds all application configuration.
@@ -261,10 +270,11 @@ func (c *Config) loadFile() error {
 	if file.PGSync.PostgresURL != "" && c.PGSync.PostgresURL == "" {
 		c.PGSync.PostgresURL = file.PGSync.PostgresURL
 	}
-	// Boolean fields are additive (OR semantics): the config file can
-	// enable PG sync but cannot disable it once enabled by an env var.
-	if file.PGSync.Enabled && !c.PGSync.Enabled {
-		c.PGSync.Enabled = true
+	// Merge enabled: explicit config-file value wins when not already
+	// set by env var. If neither sets it, IsEnabled() defaults based
+	// on postgres_url presence.
+	if file.PGSync.Enabled != nil && c.PGSync.Enabled == nil {
+		c.PGSync.Enabled = file.PGSync.Enabled
 	}
 	if file.PGSync.MachineName != "" && c.PGSync.MachineName == "" {
 		c.PGSync.MachineName = file.PGSync.MachineName
@@ -357,7 +367,8 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
 		c.PGSync.PostgresURL = v
-		c.PGSync.Enabled = true
+		t := true
+		c.PGSync.Enabled = &t
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
 		c.PGSync.MachineName = v
@@ -774,12 +785,6 @@ func (c *Config) ResolvePGSync() (PGSyncConfig, error) {
 			return pg, fmt.Errorf("expanding postgres_url: %w", err)
 		}
 		pg.PostgresURL = expanded
-	}
-	// Treat postgres_url presence as sufficient to enable sync.
-	// This avoids requiring an explicit "enabled": true in the
-	// config file when the URL is already set.
-	if pg.PostgresURL != "" {
-		pg.Enabled = true
 	}
 	if pg.Interval == "" {
 		pg.Interval = "1h"

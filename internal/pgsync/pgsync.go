@@ -15,16 +15,14 @@ import (
 )
 
 // isUndefinedTable returns true when the error indicates the
-// queried table or schema does not exist (PG error code 42P01).
+// queried relation does not exist (PG SQLSTATE 42P01). We match
+// only the SQLSTATE code to avoid false positives from other
+// "does not exist" errors (missing columns, functions, etc.).
 func isUndefinedTable(err error) bool {
 	if err == nil {
 		return false
 	}
-	// pgx wraps the PG error; check the message for the SQLSTATE
-	// code or the canonical "does not exist" phrasing.
-	msg := err.Error()
-	return strings.Contains(msg, "42P01") ||
-		strings.Contains(msg, "does not exist")
+	return strings.Contains(err.Error(), "42P01")
 }
 
 // redactDSN returns the host portion of the DSN for diagnostics,

@@ -729,6 +729,8 @@ func TestLoadFile_ResultContentBlockedCategories(t *testing.T) {
 	}
 }
 
+func boolPtr(b bool) *bool { return &b }
+
 func TestLoadFile_PGSyncConfig(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -754,7 +756,7 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 			},
 			"",
 			PGSyncConfig{
-				Enabled:     true,
+				Enabled:     boolPtr(true),
 				PostgresURL: "postgres://localhost/test",
 				MachineName: "laptop",
 				Interval:    "30m",
@@ -769,7 +771,7 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 			},
 			"postgres://from-env",
 			PGSyncConfig{
-				Enabled:     true,
+				Enabled:     boolPtr(true),
 				PostgresURL: "postgres://from-env",
 			},
 		},
@@ -784,7 +786,7 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 			},
 			"postgres://from-env",
 			PGSyncConfig{
-				Enabled:     true,
+				Enabled:     boolPtr(true),
 				PostgresURL: "postgres://from-env",
 				Interval:    "30m",
 				MachineName: "laptop",
@@ -805,10 +807,12 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if cfg.PGSync.Enabled != tt.want.Enabled {
+			gotEnabled := cfg.PGSync.IsEnabled()
+			wantEnabled := tt.want.IsEnabled()
+			if gotEnabled != wantEnabled {
 				t.Errorf(
-					"Enabled = %v, want %v",
-					cfg.PGSync.Enabled, tt.want.Enabled,
+					"IsEnabled() = %v, want %v",
+					gotEnabled, wantEnabled,
 				)
 			}
 			if cfg.PGSync.PostgresURL != tt.want.PostgresURL {
@@ -839,7 +843,7 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 func TestResolvePGSync_Defaults(t *testing.T) {
 	cfg := Config{
 		PGSync: PGSyncConfig{
-			Enabled:     true,
+			Enabled:     boolPtr(true),
 			PostgresURL: "postgres://localhost/test",
 		},
 	}

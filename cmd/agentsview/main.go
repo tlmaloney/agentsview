@@ -258,7 +258,7 @@ func runServe(args []string) {
 	} else {
 		cfg.PGSync = resolvedPG
 	}
-	if pgCfg := cfg.PGSync; pgResolveErr == nil && pgCfg.Enabled && pgCfg.PostgresURL != "" {
+	if pgCfg := cfg.PGSync; pgResolveErr == nil && pgCfg.IsEnabled() && pgCfg.PostgresURL != "" {
 		interval, parseErr := time.ParseDuration(pgCfg.Interval)
 		if parseErr != nil {
 			log.Printf("warning: pg sync invalid interval %q: %v",

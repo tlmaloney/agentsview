@@ -95,8 +95,23 @@ func ensureSchema(ctx context.Context, pg *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("adding sessions.created_at: %w", err)
 	}
+	if _, err := pg.ExecContext(ctx, `
+		ALTER TABLE agentsview.tool_calls
+		ADD COLUMN IF NOT EXISTS call_index INT NOT NULL DEFAULT 0
+	`); err != nil {
+		return fmt.Errorf("adding tool_calls.call_index: %w", err)
+	}
+	if err := ensureToolCallsSchema(ctx, pg); err != nil {
+		return err
+	}
+	// Normalize updated_at before using it as a created_at fallback.
+	if err := normalizePGUpdatedAt(ctx, pg); err != nil {
+		return err
+	}
 	// Backfill empty created_at from existing timestamp columns so
-	// historical rows sort correctly in PG read mode.
+	// historical rows sort correctly in PG read mode. Runs after
+	// normalizePGUpdatedAt so the updated_at fallback is already
+	// in ISO-8601 format.
 	if _, err := pg.ExecContext(ctx, `
 		UPDATE agentsview.sessions
 		SET created_at = COALESCE(
@@ -112,18 +127,6 @@ func ensureSchema(ctx context.Context, pg *sql.DB) error {
 		)
 	`); err != nil {
 		return fmt.Errorf("backfilling sessions.created_at: %w", err)
-	}
-	if _, err := pg.ExecContext(ctx, `
-		ALTER TABLE agentsview.tool_calls
-		ADD COLUMN IF NOT EXISTS call_index INT NOT NULL DEFAULT 0
-	`); err != nil {
-		return fmt.Errorf("adding tool_calls.call_index: %w", err)
-	}
-	if err := ensureToolCallsSchema(ctx, pg); err != nil {
-		return err
-	}
-	if err := normalizePGUpdatedAt(ctx, pg); err != nil {
-		return err
 	}
 	return nil
 }
