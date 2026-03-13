@@ -69,6 +69,11 @@ var terminalCandidates = []struct {
 func (s *Server) handleResumeSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	id := r.PathValue("id")
 
 	// Look up the session with full file metadata so

@@ -1155,15 +1155,6 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 	return total, nil
 }
 
-// ListSessionsModifiedSince returns all sessions created or
-// modified after the given ISO-8601 timestamp. Used by PG sync
-// to find sessions that need pushing.
-func (db *DB) ListSessionsModifiedSince(
-	ctx context.Context, since string,
-) ([]Session, error) {
-	return db.ListSessionsModifiedBetween(ctx, since, "")
-}
-
 // ListSessionsModifiedBetween returns all sessions created or
 // modified after since and at or before until.
 //
