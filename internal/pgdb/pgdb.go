@@ -105,6 +105,10 @@ func New(pgURL string) (*PGDB, error) {
 	return &PGDB{pg: pg}, nil
 }
 
+// DB returns the underlying *sql.DB for operations that need
+// direct access (e.g. schema migrations).
+func (p *PGDB) DB() *sql.DB { return p.pg }
+
 // Close closes the underlying database connection.
 func (p *PGDB) Close() error {
 	return p.pg.Close()

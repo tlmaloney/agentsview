@@ -719,6 +719,15 @@ func runServePGRead(cfg config.Config, start time.Time) {
 	}
 	defer store.Close()
 
+	// Ensure the PG schema is up to date so pg-read works even
+	// against databases from older sync builds that may lack
+	// recent columns (e.g. created_at).
+	if err := pgsync.EnsureSchemaDB(
+		context.Background(), store.DB(),
+	); err != nil {
+		fatal("pg read schema migration: %v", err)
+	}
+
 	if cfg.CursorSecret != "" {
 		secret, decErr := base64.StdEncoding.DecodeString(
 			cfg.CursorSecret,
