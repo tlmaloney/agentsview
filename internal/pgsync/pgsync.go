@@ -153,11 +153,12 @@ func (p *PGSync) runSyncCycle(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-	} else if pushResult.SessionsPushed > 0 {
+	} else if pushResult.SessionsPushed > 0 || pushResult.Errors > 0 {
 		log.Printf(
-			"pg sync push: %d sessions, %d messages in %s",
+			"pg sync push: %d sessions, %d messages, %d errors in %s",
 			pushResult.SessionsPushed,
 			pushResult.MessagesPushed,
+			pushResult.Errors,
 			pushResult.Duration.Round(time.Millisecond),
 		)
 	}

@@ -164,6 +164,9 @@ func runPGSync(
 			result.MessagesPushed,
 			result.Duration.Round(time.Millisecond),
 		)
+		if result.Errors > 0 {
+			fatal("pg sync: %d session(s) failed to push", result.Errors)
+		}
 	}
 
 	if cfg.PGStatus {
