@@ -56,6 +56,9 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	if err != nil {
 		return result, fmt.Errorf("reading last_push_at: %w", err)
 	}
+	if full {
+		lastPush = ""
+	}
 
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
 

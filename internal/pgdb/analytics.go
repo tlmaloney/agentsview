@@ -1803,7 +1803,9 @@ func (p *PGDB) GetAnalyticsTopSessions(
 	case "duration":
 		orderExpr = `(EXTRACT(EPOCH FROM (ended_at::timestamp - started_at::timestamp)) / 60.0) DESC, id ASC`
 		where += " AND started_at IS NOT NULL AND started_at != ''" +
-			" AND ended_at IS NOT NULL AND ended_at != ''"
+			" AND ended_at IS NOT NULL AND ended_at != ''" +
+			` AND started_at ~ '^\d{4}-\d{2}-\d{2}'` +
+			` AND ended_at ~ '^\d{4}-\d{2}-\d{2}'`
 	default:
 		metric = "messages"
 		orderExpr = "message_count DESC, id ASC"
@@ -1874,6 +1876,23 @@ func (p *PGDB) GetAnalyticsTopSessions(
 	if sessions == nil {
 		sessions = []db.TopSession{}
 	}
+
+	// When Go-side time filtering removed rows, the SQL ordering
+	// may have gaps. Re-sort by the active metric so the top 10
+	// are correct after filtering.
+	if f.HasTimeFilter() && len(sessions) > 1 {
+		switch metric {
+		case "duration":
+			sort.Slice(sessions, func(i, j int) bool {
+				return sessions[i].DurationMin > sessions[j].DurationMin
+			})
+		default:
+			sort.Slice(sessions, func(i, j int) bool {
+				return sessions[i].MessageCount > sessions[j].MessageCount
+			})
+		}
+	}
+
 	if len(sessions) > 10 {
 		sessions = sessions[:10]
 	}

@@ -12,7 +12,7 @@ import (
 func RedactDSN(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "<invalid-dsn>"
+		return ""
 	}
 	return u.Hostname()
 }
