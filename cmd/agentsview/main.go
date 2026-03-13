@@ -769,15 +769,34 @@ func runServePGRead(cfg config.Config, start time.Time) {
 		server.WithDataDir(cfg.DataDir),
 	)
 
-	url := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	srvURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 	fmt.Printf(
 		"agentsview %s listening at %s (pg read-only, started in %s)\n",
-		version, url,
+		version, srvURL,
 		time.Since(start).Round(time.Millisecond),
 	)
 
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
-		fatal("server error: %v", err)
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- srv.ListenAndServe()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case sig := <-sigCh:
+		log.Printf("received %v, shutting down", sig)
+	case err := <-serveErrCh:
+		if err != nil && err != http.ErrServerClosed {
+			fatal("server error: %v", err)
+		}
+		return
+	}
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(), 5*time.Second,
+	)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown error: %v", err)
 	}
 }

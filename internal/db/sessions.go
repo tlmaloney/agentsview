@@ -880,7 +880,7 @@ func (db *DB) GetMachines(
 	}
 	defer rows.Close()
 
-	var machines []string
+	machines := []string{}
 	for rows.Next() {
 		var m string
 		if err := rows.Scan(&m); err != nil {

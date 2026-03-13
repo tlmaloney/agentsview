@@ -69,11 +69,6 @@ var terminalCandidates = []struct {
 func (s *Server) handleResumeSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
-	if s.db.ReadOnly() {
-		writeError(w, http.StatusNotImplemented,
-			"not available in remote mode")
-		return
-	}
 	id := r.PathValue("id")
 
 	// Look up the session with full file metadata so
@@ -148,6 +143,14 @@ func (s *Server) handleResumeSession(
 			Command:  cmd,
 			Cwd:      sessionDir,
 		})
+		return
+	}
+
+	// Block actual launches in read-only mode. command_only
+	// requests above are safe and remain available.
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"session launch not available in remote mode")
 		return
 	}
 
