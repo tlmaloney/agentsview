@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/wesm/agentsview/internal/db"
+	"github.com/wesm/agentsview/internal/pgutil"
 )
 
 // isUndefinedTable returns true when the error indicates the
@@ -23,78 +23,6 @@ func isUndefinedTable(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "42P01")
-}
-
-// warnInsecureSSL logs a warning when the PG connection string
-// targets a non-loopback host without TLS encryption. Handles
-// both URI (postgres://...) and key-value (host=... sslmode=...)
-// connection string formats.
-func warnInsecureSSL(dsn string) {
-	host, mode := parseSSLParams(dsn)
-	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
-		return
-	}
-	if mode == "" || mode == "disable" || mode == "prefer" || mode == "allow" {
-		log.Printf("warning: pg connection to %s uses sslmode=%q; "+
-			"consider sslmode=require or verify-full for non-local hosts",
-			host, mode)
-	}
-}
-
-// parseSSLParams extracts host and sslmode from a DSN. It tries
-// URI format first, then falls back to key-value format.
-func parseSSLParams(dsn string) (host, sslmode string) {
-	if u, err := url.Parse(dsn); err == nil && u.Host != "" {
-		return u.Hostname(), u.Query().Get("sslmode")
-	}
-	// Key-value format: host=... sslmode=...
-	host = kvParam(dsn, "host")
-	sslmode = kvParam(dsn, "sslmode")
-	// Unix-socket paths (host=/var/run/...) are local; treat as
-	// loopback so the warning is not triggered.
-	if strings.HasPrefix(host, "/") {
-		host = ""
-	}
-	return host, sslmode
-}
-
-// kvParam extracts a key-value parameter from a libpq-style DSN.
-// Handles optional quoting (key='value with spaces').
-func kvParam(dsn, key string) string {
-	prefix := key + "="
-	idx := strings.Index(dsn, prefix)
-	if idx < 0 {
-		return ""
-	}
-	// Ensure we matched a full key (not a substring like "hostaddr=").
-	if idx > 0 && dsn[idx-1] != ' ' && dsn[idx-1] != '\t' {
-		return ""
-	}
-	val := dsn[idx+len(prefix):]
-	if len(val) > 0 && val[0] == '\'' {
-		// Quoted value: find closing quote.
-		end := strings.IndexByte(val[1:], '\'')
-		if end >= 0 {
-			return val[1 : end+1]
-		}
-		return val[1:]
-	}
-	// Unquoted: take until next whitespace.
-	if end := strings.IndexAny(val, " \t"); end >= 0 {
-		return val[:end]
-	}
-	return val
-}
-
-// redactDSN returns the host portion of the DSN for diagnostics,
-// stripping credentials, query parameters, and path components
-// that may contain secrets.
-func redactDSN(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return "<invalid-dsn>"
-	}
-	return u.Hostname()
 }
 
 // PGSync manages push-only sync from local SQLite to a remote
@@ -130,14 +58,14 @@ func New(
 			"machine name %q is reserved; choose a different pg_sync.machine_name", machine,
 		)
 	}
-	warnInsecureSSL(pgURL)
+	pgutil.WarnInsecureSSL(pgURL)
 	if local == nil {
 		return nil, fmt.Errorf("local db is required")
 	}
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
 		return nil, fmt.Errorf("opening pg connection (host=%s): %w",
-			redactDSN(pgURL), err)
+			pgutil.RedactDSN(pgURL), err)
 	}
 	pg.SetMaxOpenConns(5)
 	pg.SetMaxIdleConns(5)
@@ -151,7 +79,7 @@ func New(
 	if err := pg.PingContext(ctx); err != nil {
 		pg.Close()
 		return nil, fmt.Errorf("pg ping failed (host=%s): %w",
-			redactDSN(pgURL), err)
+			pgutil.RedactDSN(pgURL), err)
 	}
 
 	return &PGSync{

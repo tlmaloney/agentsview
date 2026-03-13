@@ -1,6 +1,10 @@
 package pgdb
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wesm/agentsview/internal/pgutil"
+)
 
 func TestRedactDSN(t *testing.T) {
 	tests := []struct {
@@ -25,9 +29,9 @@ func TestRedactDSN(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		got := redactDSN(tt.input)
+		got := pgutil.RedactDSN(tt.input)
 		if got != tt.want {
-			t.Errorf("redactDSN(%q) = %q, want %q",
+			t.Errorf("RedactDSN(%q) = %q, want %q",
 				tt.input, got, tt.want)
 		}
 	}
