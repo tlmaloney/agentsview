@@ -233,20 +233,22 @@ func IsReadOnlyError(err error) bool {
 // an error describing what is missing.
 func CheckSchemaCompat(ctx context.Context, pg *sql.DB) error {
 	// Probe sessions table for required columns.
-	_, err := pg.QueryContext(ctx,
+	rows, err := pg.QueryContext(ctx,
 		`SELECT id, created_at, deleted_at, updated_at
 		 FROM agentsview.sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"sessions table missing required columns: %w", err)
 	}
+	rows.Close()
 	// Probe tool_calls table for call_index.
-	_, err = pg.QueryContext(ctx,
+	rows, err = pg.QueryContext(ctx,
 		`SELECT call_index
 		 FROM agentsview.tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"tool_calls table missing required columns: %w", err)
 	}
+	rows.Close()
 	return nil
 }
