@@ -413,6 +413,85 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 	}
 }
 
+func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(pgURL, local, "machine-a", time.Hour)
+	if err != nil {
+		t.Fatalf("creating pgsync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	started := time.Now().UTC().Format(time.RFC3339)
+	sess := db.Session{
+		ID:           "sess-bump-001",
+		Project:      "test",
+		Machine:      "local",
+		Agent:        "test-agent",
+		StartedAt:    &started,
+		MessageCount: 1,
+	}
+	if err := local.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+	msg := db.Message{
+		SessionID:     "sess-bump-001",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+	}
+	if err := local.ReplaceSessionMessages("sess-bump-001", []db.Message{msg}); err != nil {
+		t.Fatalf("replace messages: %v", err)
+	}
+
+	// Initial push.
+	if _, err := ps.Push(ctx, false); err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+
+	var updatedAt1 string
+	if err := ps.pg.QueryRowContext(ctx,
+		"SELECT updated_at FROM agentsview.sessions WHERE id = $1",
+		"sess-bump-001",
+	).Scan(&updatedAt1); err != nil {
+		t.Fatalf("querying updated_at: %v", err)
+	}
+
+	// Sleep briefly so the timestamp changes.
+	time.Sleep(10 * time.Millisecond)
+
+	// Full push (forces message rewrite even though content unchanged).
+	result, err := ps.Push(ctx, true)
+	if err != nil {
+		t.Fatalf("full push: %v", err)
+	}
+	if result.MessagesPushed == 0 {
+		t.Fatal("expected messages to be pushed on full push")
+	}
+
+	var updatedAt2 string
+	if err := ps.pg.QueryRowContext(ctx,
+		"SELECT updated_at FROM agentsview.sessions WHERE id = $1",
+		"sess-bump-001",
+	).Scan(&updatedAt2); err != nil {
+		t.Fatalf("querying updated_at after full push: %v", err)
+	}
+
+	if updatedAt2 <= updatedAt1 {
+		t.Errorf("updated_at not bumped: before=%q, after=%q",
+			updatedAt1, updatedAt2)
+	}
+}
+
 func TestPushFullBypassesHeuristic(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)

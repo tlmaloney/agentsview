@@ -31,6 +31,7 @@ type pushBoundaryState struct {
 type PushResult struct {
 	SessionsPushed int
 	MessagesPushed int
+	Errors         int
 	Duration       time.Duration
 }
 
@@ -156,9 +157,9 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 		msgCount, err := p.pushMessages(ctx, tx, s.ID, full)
 		if err != nil {
 			_ = tx.Rollback()
-			return result, fmt.Errorf(
-				"pushing messages for %s: %w", s.ID, err,
-			)
+			log.Printf("pgsync: skipping session %s: %v", s.ID, err)
+			result.Errors++
+			continue
 		}
 
 		// Bump updated_at when messages were rewritten so pg-read
