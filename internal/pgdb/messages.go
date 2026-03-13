@@ -147,7 +147,7 @@ func (p *PGDB) Search(
 	// $1 = ILIKE-escaped term (for WHERE), $2 = raw term (for
 	// POSITION snippet extraction which must not see escape chars).
 	whereClauses := []string{
-		"m.content ILIKE '%' || $1 || '%' ESCAPE '\\'",
+		`m.content ILIKE '%' || $1 || '%' ESCAPE E'\\'`,
 		"s.deleted_at IS NULL",
 	}
 	args := []any{escapeLike(searchTerm), searchTerm}
