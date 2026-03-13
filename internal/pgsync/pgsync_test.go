@@ -309,6 +309,35 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+func TestStatusMissingSchema(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	if err != nil {
+		t.Fatalf("creating pgsync: %v", err)
+	}
+	defer ps.Close()
+
+	// Status without EnsureSchema should return zeros, not an error.
+	ctx := context.Background()
+	status, err := ps.Status(ctx)
+	if err != nil {
+		t.Fatalf("status on missing schema: %v", err)
+	}
+	if status.PGSessions != 0 {
+		t.Errorf("pg sessions = %d, want 0", status.PGSessions)
+	}
+	if status.PGMessages != 0 {
+		t.Errorf("pg messages = %d, want 0", status.PGMessages)
+	}
+	if status.Machine != "test-machine" {
+		t.Errorf("machine = %q, want %q", status.Machine, "test-machine")
+	}
+}
+
 func TestNewRejectsMachineLocal(t *testing.T) {
 	pgURL := testPGURL(t)
 	local := testDB(t)

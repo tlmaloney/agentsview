@@ -792,6 +792,32 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 				MachineName: "laptop",
 			},
 		},
+		{
+			"URLWithoutEnabledDefaultsToEnabled",
+			map[string]any{
+				"pg_sync": map[string]any{
+					"postgres_url": "postgres://localhost/test",
+				},
+			},
+			"",
+			PGSyncConfig{
+				PostgresURL: "postgres://localhost/test",
+			},
+		},
+		{
+			"ExplicitFalseWithURL",
+			map[string]any{
+				"pg_sync": map[string]any{
+					"enabled":      false,
+					"postgres_url": "postgres://localhost/test",
+				},
+			},
+			"",
+			PGSyncConfig{
+				Enabled:     boolPtr(false),
+				PostgresURL: "postgres://localhost/test",
+			},
+		},
 	}
 
 	for _, tt := range tests {
