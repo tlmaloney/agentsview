@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -722,21 +721,26 @@ func runServePGRead(cfg config.Config, start time.Time) {
 
 	// Best-effort schema migration so pg-read works against
 	// databases from older sync builds that may lack recent
-	// columns. Read-only PG roles (42501) and hot standbys
-	// (25006) will reject DDL, which is fine — the schema is
-	// already current if a writer has been running. Other
-	// errors are fatal because they indicate a genuine schema
-	// incompatibility that will cause request-time failures.
+	// columns. Read-only PG roles and hot standbys will reject
+	// DDL — suppress those and verify schema compatibility
+	// separately. Other migration errors are fatal.
 	if err := pgsync.EnsureSchemaDB(
 		context.Background(), store.DB(),
 	); err != nil {
-		msg := err.Error()
-		if strings.Contains(msg, "25006") ||
-			strings.Contains(msg, "42501") {
+		if pgsync.IsReadOnlyError(err) {
 			log.Printf("pg read: schema migration skipped (read-only connection): %v", err)
 		} else {
 			fatal("pg read schema migration: %v", err)
 		}
+	}
+	// Verify required columns exist regardless of whether
+	// migration ran or was skipped. This catches stale schemas
+	// on read-only connections at startup instead of at request
+	// time.
+	if err := pgsync.CheckSchemaCompat(
+		context.Background(), store.DB(),
+	); err != nil {
+		fatal("pg read: incompatible schema: %v", err)
 	}
 
 	if cfg.CursorSecret != "" {

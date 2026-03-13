@@ -3,7 +3,10 @@ package pgsync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const toolCallsSchemaVersionKey = "tool_calls_call_index_version"
@@ -209,6 +212,41 @@ func ensureToolCallsSchema(ctx context.Context, pg *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tool_calls schema tx: %w", err)
+	}
+	return nil
+}
+
+// IsReadOnlyError returns true when the error indicates a PG
+// read-only or insufficient-privilege condition (SQLSTATE 25006
+// or 42501). Uses pgconn.PgError for reliable SQLSTATE matching.
+func IsReadOnlyError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "25006" || pgErr.Code == "42501"
+	}
+	return false
+}
+
+// CheckSchemaCompat verifies that the PG schema has all columns
+// required by the pg-read query paths. This is a read-only probe
+// that works against any PG role. Returns nil if compatible, or
+// an error describing what is missing.
+func CheckSchemaCompat(ctx context.Context, pg *sql.DB) error {
+	// Probe sessions table for required columns.
+	_, err := pg.QueryContext(ctx,
+		`SELECT id, created_at, deleted_at, updated_at
+		 FROM agentsview.sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing required columns: %w", err)
+	}
+	// Probe tool_calls table for call_index.
+	_, err = pg.QueryContext(ctx,
+		`SELECT call_index
+		 FROM agentsview.tool_calls LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"tool_calls table missing required columns: %w", err)
 	}
 	return nil
 }
