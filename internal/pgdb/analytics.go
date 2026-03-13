@@ -1855,9 +1855,14 @@ func (p *PGDB) GetAnalyticsTopSessions(
 			tS, okS := localTime(*startedAt, loc)
 			tE, okE := localTime(*endedAt, loc)
 			if okS && okE {
-				durMin = math.Round(
-					tE.Sub(tS).Minutes()*10) / 10
+				durMin = tE.Sub(tS).Minutes()
+			} else if needsGoSort {
+				// Skip rows with unparseable timestamps
+				// for duration ranking.
+				continue
 			}
+		} else if needsGoSort {
+			continue
 		}
 		sessions = append(sessions, db.TopSession{
 			ID:           id,
@@ -1876,10 +1881,10 @@ func (p *PGDB) GetAnalyticsTopSessions(
 		sessions = []db.TopSession{}
 	}
 
-	// Duration ranking is computed in Go, so sort by duration
-	// descending with id as a stable tie-breaker (matching the
-	// SQL tie-breaker for messages). For messages, SQL already
-	// provides the correct order and filtering preserves it.
+	// Duration ranking is computed in Go, so sort by exact
+	// (unrounded) duration descending with id as a stable
+	// tie-breaker. For messages, SQL already provides the
+	// correct order and filtering preserves it.
 	if needsGoSort && len(sessions) > 1 {
 		sort.SliceStable(sessions, func(i, j int) bool {
 			if sessions[i].DurationMin != sessions[j].DurationMin {
@@ -1891,6 +1896,13 @@ func (p *PGDB) GetAnalyticsTopSessions(
 
 	if len(sessions) > 10 {
 		sessions = sessions[:10]
+	}
+
+	// Round duration to one decimal place for display after
+	// sorting so that ranking uses exact values.
+	for i := range sessions {
+		sessions[i].DurationMin = math.Round(
+			sessions[i].DurationMin*10) / 10
 	}
 
 	return db.TopSessionsResponse{
