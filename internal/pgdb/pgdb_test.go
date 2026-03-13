@@ -30,11 +30,15 @@ func ensureSchema(t *testing.T, pgURL string) {
 	}
 	defer pg.Close()
 
-	// Create schema and tables.
+	// Drop and recreate tables so the test schema is always current.
+	pg.Exec(`DROP TABLE IF EXISTS agentsview.tool_calls CASCADE`)
+	pg.Exec(`DROP TABLE IF EXISTS agentsview.messages CASCADE`)
+	pg.Exec(`DROP TABLE IF EXISTS agentsview.sessions CASCADE`)
+
 	_, err = pg.Exec(`
 		CREATE SCHEMA IF NOT EXISTS agentsview;
 
-		CREATE TABLE IF NOT EXISTS agentsview.sessions (
+		CREATE TABLE agentsview.sessions (
 			id TEXT PRIMARY KEY,
 			machine TEXT NOT NULL,
 			project TEXT NOT NULL,
@@ -52,7 +56,7 @@ func ensureSchema(t *testing.T, pgURL string) {
 			updated_at TEXT NOT NULL DEFAULT ''
 		);
 
-		CREATE TABLE IF NOT EXISTS agentsview.messages (
+		CREATE TABLE agentsview.messages (
 			session_id TEXT NOT NULL,
 			ordinal INT NOT NULL,
 			role TEXT NOT NULL,
@@ -64,7 +68,7 @@ func ensureSchema(t *testing.T, pgURL string) {
 			PRIMARY KEY (session_id, ordinal)
 		);
 
-		CREATE TABLE IF NOT EXISTS agentsview.tool_calls (
+		CREATE TABLE agentsview.tool_calls (
 			id BIGSERIAL PRIMARY KEY,
 			session_id TEXT NOT NULL,
 			tool_name TEXT NOT NULL,
@@ -83,32 +87,25 @@ func ensureSchema(t *testing.T, pgURL string) {
 		t.Fatalf("creating schema: %v", err)
 	}
 
-	// Ensure created_at column exists (may be missing from earlier runs).
-	pg.Exec(`ALTER TABLE agentsview.sessions ADD COLUMN IF NOT EXISTS created_at TEXT NOT NULL DEFAULT ''`)
-
-	// Insert test data if not present.
-	var count int
-	pg.QueryRow("SELECT COUNT(*) FROM agentsview.sessions WHERE id = 'pgdb-test-001'").Scan(&count)
-	if count == 0 {
-		_, err = pg.Exec(`
-			INSERT INTO agentsview.sessions
-				(id, machine, project, agent, first_message, started_at, ended_at, message_count, user_message_count)
-			VALUES
-				('pgdb-test-001', 'test-machine', 'test-project', 'claude-code',
-				 'hello world', '2026-03-12T10:00:00Z', '2026-03-12T10:30:00Z', 2, 1)
-		`)
-		if err != nil {
-			t.Fatalf("inserting test session: %v", err)
-		}
-		_, err = pg.Exec(`
-			INSERT INTO agentsview.messages (session_id, ordinal, role, content, timestamp, content_length)
-			VALUES
-				('pgdb-test-001', 0, 'user', 'hello world', '2026-03-12T10:00:00Z', 11),
-				('pgdb-test-001', 1, 'assistant', 'hi there', '2026-03-12T10:00:01Z', 8)
-		`)
-		if err != nil {
-			t.Fatalf("inserting test messages: %v", err)
-		}
+	// Insert test data.
+	_, err = pg.Exec(`
+		INSERT INTO agentsview.sessions
+			(id, machine, project, agent, first_message, started_at, ended_at, message_count, user_message_count)
+		VALUES
+			('pgdb-test-001', 'test-machine', 'test-project', 'claude-code',
+			 'hello world', '2026-03-12T10:00:00Z', '2026-03-12T10:30:00Z', 2, 1)
+	`)
+	if err != nil {
+		t.Fatalf("inserting test session: %v", err)
+	}
+	_, err = pg.Exec(`
+		INSERT INTO agentsview.messages (session_id, ordinal, role, content, timestamp, content_length)
+		VALUES
+			('pgdb-test-001', 0, 'user', 'hello world', '2026-03-12T10:00:00Z', 11),
+			('pgdb-test-001', 1, 'assistant', 'hi there', '2026-03-12T10:00:01Z', 8)
+	`)
+	if err != nil {
+		t.Fatalf("inserting test messages: %v", err)
 	}
 }
 
