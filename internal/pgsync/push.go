@@ -365,6 +365,20 @@ func (p *PGSync) pushMessages(
 		return 0, fmt.Errorf("counting local messages: %w", err)
 	}
 	if localCount == 0 {
+		// Clean up any stale PG messages/tool_calls for this session
+		// (e.g. local resync re-parsed the file as empty).
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM agentsview.tool_calls WHERE session_id = $1`,
+			sessionID,
+		); err != nil {
+			return 0, fmt.Errorf("deleting stale pg tool_calls: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM agentsview.messages WHERE session_id = $1`,
+			sessionID,
+		); err != nil {
+			return 0, fmt.Errorf("deleting stale pg messages: %w", err)
+		}
 		return 0, nil
 	}
 
@@ -393,6 +407,11 @@ func (p *PGSync) pushMessages(
 	// tool_call content fingerprint (sum of result_content_length)
 	// all match we assume the session is unchanged. Skipped when
 	// full=true.
+	//
+	// Known limitation: this can produce false negatives when message
+	// content changes without affecting content_length statistics
+	// (e.g. rewritten to different text of the same byte length).
+	// Use -full to force a complete re-push when needed.
 	if !full && pgCount == localCount && pgCount > 0 {
 		localSum, localMax, localMin, err := p.local.MessageContentFingerprint(sessionID)
 		if err != nil {

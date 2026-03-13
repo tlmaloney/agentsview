@@ -1194,13 +1194,9 @@ func (db *DB) ListSessionsModifiedBetween(
 		sinceText := sinceTime.UTC().Format("2006-01-02T15:04:05.000Z")
 		sinceNano := sinceTime.UnixNano()
 		where = append(where, `(file_mtime > ?
-			OR `+sqliteSyncTimestampExpr("NULLIF(local_modified_at, '')")+` > ?
-			OR `+sqliteSyncTimestampExpr(`COALESCE(
-				NULLIF(ended_at, ''),
-				NULLIF(started_at, ''),
-				created_at
-			)`)+` > ?
-			OR `+sqliteSyncTimestampExpr("created_at")+` > ?)`)
+			OR `+sqliteSyncTimestampExpr(colLocalModifiedAt)+` > ?
+			OR `+sqliteSyncTimestampExpr(colBestTimestamp)+` > ?
+			OR `+sqliteSyncTimestampExpr(colCreatedAt)+` > ?)`)
 		args = append(args, sinceNano, sinceText, sinceText, sinceText)
 	}
 	if until != "" {
@@ -1218,13 +1214,9 @@ func (db *DB) ListSessionsModifiedBetween(
 		// timestamp comparisons below. The since clause omits COALESCE
 		// so that NULL file_mtime does not satisfy > sinceNano.
 		where = append(where, `(COALESCE(file_mtime, -1) <= ?
-			AND COALESCE(`+sqliteSyncTimestampExpr("NULLIF(local_modified_at, '')")+`, '') <= ?
-			AND `+sqliteSyncTimestampExpr(`COALESCE(
-				NULLIF(ended_at, ''),
-				NULLIF(started_at, ''),
-				created_at
-			)`)+` <= ?
-			AND `+sqliteSyncTimestampExpr("created_at")+` <= ?)`)
+			AND COALESCE(`+sqliteSyncTimestampExpr(colLocalModifiedAt)+`, '') <= ?
+			AND `+sqliteSyncTimestampExpr(colBestTimestamp)+` <= ?
+			AND `+sqliteSyncTimestampExpr(colCreatedAt)+` <= ?)`)
 		args = append(args, untilNano, untilText, untilText, untilText)
 	}
 	if len(where) > 0 {
@@ -1260,6 +1252,21 @@ func (db *DB) ListSessionsModifiedBetween(
 	return sessions, rows.Err()
 }
 
-func sqliteSyncTimestampExpr(expr string) string {
-	return "strftime('%Y-%m-%dT%H:%M:%fZ', " + expr + ")"
+// trustedSQLiteExpr is a string type for SQL expressions known to be safe
+// (literals, column references). Using a distinct type prevents accidental
+// injection of user input, mirroring the trustedSQL pattern in pgsync/time.go.
+type trustedSQLiteExpr string
+
+const (
+	colLocalModifiedAt trustedSQLiteExpr = "NULLIF(local_modified_at, '')"
+	colBestTimestamp   trustedSQLiteExpr = `COALESCE(
+				NULLIF(ended_at, ''),
+				NULLIF(started_at, ''),
+				created_at
+			)`
+	colCreatedAt trustedSQLiteExpr = "created_at"
+)
+
+func sqliteSyncTimestampExpr(expr trustedSQLiteExpr) string {
+	return "strftime('%Y-%m-%dT%H:%M:%fZ', " + string(expr) + ")"
 }

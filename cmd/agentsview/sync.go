@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -146,7 +147,8 @@ func runPGSync(
 	}
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	if err := ps.EnsureSchema(ctx); err != nil {
 		fatal("pg sync schema: %v", err)

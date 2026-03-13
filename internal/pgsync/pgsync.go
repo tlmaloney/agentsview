@@ -86,9 +86,19 @@ func (p *PGSync) Close() error {
 }
 
 // EnsureSchema creates the agentsview schema and tables in PG
-// if they don't already exist.
+// if they don't already exist. It also marks the schema as
+// initialized so subsequent Push calls skip redundant checks.
 func (p *PGSync) EnsureSchema(ctx context.Context) error {
-	return ensureSchema(ctx, p.pg)
+	p.schemaMu.Lock()
+	defer p.schemaMu.Unlock()
+	if p.schemaDone {
+		return nil
+	}
+	if err := ensureSchema(ctx, p.pg); err != nil {
+		return err
+	}
+	p.schemaDone = true
+	return nil
 }
 
 // EnsureSchemaDB creates the agentsview schema and tables in PG
