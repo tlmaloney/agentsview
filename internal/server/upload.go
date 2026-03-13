@@ -164,6 +164,12 @@ func (s *Server) saveSessionToDB(
 func (s *Server) handleUploadSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"uploads are not available in read-only mode")
+		return
+	}
+
 	req, errMsg := parseUploadRequest(r)
 	if errMsg != "" {
 		writeError(w, http.StatusBadRequest, errMsg)

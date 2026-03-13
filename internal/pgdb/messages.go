@@ -144,12 +144,14 @@ func (p *PGDB) Search(
 
 	searchTerm := stripFTSQuotes(f.Query)
 
+	// $1 = ILIKE-escaped term (for WHERE), $2 = raw term (for
+	// POSITION snippet extraction which must not see escape chars).
 	whereClauses := []string{
 		"m.content ILIKE '%' || $1 || '%'",
 		"s.deleted_at IS NULL",
 	}
-	args := []any{escapeLike(searchTerm)}
-	argIdx := 2
+	args := []any{escapeLike(searchTerm), searchTerm}
+	argIdx := 3
 
 	if f.Project != "" {
 		whereClauses = append(
@@ -164,8 +166,8 @@ func (p *PGDB) Search(
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, m.ordinal, m.role,
 			COALESCE(m.timestamp, ''),
-			CASE WHEN POSITION(LOWER($1) IN LOWER(m.content)) > 100
-				THEN '...' || SUBSTRING(m.content FROM GREATEST(1, POSITION(LOWER($1) IN LOWER(m.content)) - 50) FOR 200) || '...'
+			CASE WHEN POSITION(LOWER($2) IN LOWER(m.content)) > 100
+				THEN '...' || SUBSTRING(m.content FROM GREATEST(1, POSITION(LOWER($2) IN LOWER(m.content)) - 50) FOR 200) || '...'
 				ELSE SUBSTRING(m.content FROM 1 FOR 200) || CASE WHEN LENGTH(m.content) > 200 THEN '...' ELSE '' END
 			END AS snippet,
 			1.0 AS rank

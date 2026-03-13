@@ -74,68 +74,117 @@ const pgRootSessionFilter = `message_count > 0
 
 // buildPGSessionFilter returns a WHERE clause with $N placeholders
 // and the corresponding args for the non-cursor predicates in
-// db.SessionFilter.
+// db.SessionFilter. When IncludeChildren is true, filter predicates
+// apply only to root sessions; children are included via a subquery
+// on their parent, matching the SQLite implementation.
 func buildPGSessionFilter(f db.SessionFilter) (string, []any) {
 	pb := &paramBuilder{}
-	preds := []string{
+	basePreds := []string{
 		"message_count > 0",
-		"relationship_type NOT IN ('subagent', 'fork')",
 		"deleted_at IS NULL",
 	}
+	if !f.IncludeChildren {
+		basePreds = append(basePreds,
+			"relationship_type NOT IN ('subagent', 'fork')")
+	}
+
+	// Filter predicates narrow results. When IncludeChildren is
+	// true these only apply to root sessions; children are
+	// included via a subquery on their parent.
+	var filterPreds []string
 
 	if f.Project != "" {
-		preds = append(preds, "project = "+pb.add(f.Project))
+		filterPreds = append(filterPreds, "project = "+pb.add(f.Project))
 	}
 	if f.ExcludeProject != "" {
-		preds = append(preds, "project != "+pb.add(f.ExcludeProject))
+		filterPreds = append(filterPreds, "project != "+pb.add(f.ExcludeProject))
 	}
 	if f.Machine != "" {
-		preds = append(preds, "machine = "+pb.add(f.Machine))
+		filterPreds = append(filterPreds, "machine = "+pb.add(f.Machine))
 	}
 	if f.Agent != "" {
 		agents := strings.Split(f.Agent, ",")
 		if len(agents) == 1 {
-			preds = append(preds, "agent = "+pb.add(agents[0]))
+			filterPreds = append(filterPreds, "agent = "+pb.add(agents[0]))
 		} else {
 			placeholders := make([]string, len(agents))
 			for i, a := range agents {
 				placeholders[i] = pb.add(a)
 			}
-			preds = append(preds,
+			filterPreds = append(filterPreds,
 				"agent IN ("+strings.Join(placeholders, ",")+")",
 			)
 		}
 	}
 	if f.Date != "" {
-		preds = append(preds,
+		filterPreds = append(filterPreds,
 			"SUBSTRING(COALESCE(NULLIF(started_at, ''), created_at) FROM 1 FOR 10) = "+pb.add(f.Date))
 	}
 	if f.DateFrom != "" {
-		preds = append(preds,
+		filterPreds = append(filterPreds,
 			"SUBSTRING(COALESCE(NULLIF(started_at, ''), created_at) FROM 1 FOR 10) >= "+pb.add(f.DateFrom))
 	}
 	if f.DateTo != "" {
-		preds = append(preds,
+		filterPreds = append(filterPreds,
 			"SUBSTRING(COALESCE(NULLIF(started_at, ''), created_at) FROM 1 FOR 10) <= "+pb.add(f.DateTo))
 	}
 	if f.ActiveSince != "" {
-		preds = append(preds,
+		filterPreds = append(filterPreds,
 			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= "+pb.add(f.ActiveSince))
 	}
 	if f.MinMessages > 0 {
-		preds = append(preds, "message_count >= "+pb.add(f.MinMessages))
+		filterPreds = append(filterPreds, "message_count >= "+pb.add(f.MinMessages))
 	}
 	if f.MaxMessages > 0 {
-		preds = append(preds, "message_count <= "+pb.add(f.MaxMessages))
+		filterPreds = append(filterPreds, "message_count <= "+pb.add(f.MaxMessages))
 	}
 	if f.MinUserMessages > 0 {
-		preds = append(preds, "user_message_count >= "+pb.add(f.MinUserMessages))
-	}
-	if f.ExcludeOneShot {
-		preds = append(preds, "user_message_count > 1")
+		filterPreds = append(filterPreds, "user_message_count >= "+pb.add(f.MinUserMessages))
 	}
 
-	return strings.Join(preds, " AND "), pb.args
+	// ExcludeOneShot is handled separately when IncludeChildren
+	// is true — children are almost always one-shot by nature
+	// and must not be excluded.
+	oneShotPred := ""
+	if f.ExcludeOneShot {
+		if f.IncludeChildren {
+			oneShotPred = "user_message_count > 1"
+		} else {
+			filterPreds = append(filterPreds,
+				"user_message_count > 1")
+		}
+	}
+
+	// Simple case: no IncludeChildren or no user filters.
+	hasFilters := len(filterPreds) > 0 || oneShotPred != ""
+	if !f.IncludeChildren || !hasFilters {
+		allPreds := append(basePreds, filterPreds...)
+		return strings.Join(allPreds, " AND "), pb.args
+	}
+
+	// IncludeChildren + filters: match the filter directly,
+	// or be a child of a session that matches the filter.
+	baseWhere := strings.Join(basePreds, " AND ")
+
+	rootMatchParts := append([]string{}, filterPreds...)
+	if oneShotPred != "" {
+		rootMatchParts = append(rootMatchParts, oneShotPred)
+	}
+	rootMatch := strings.Join(rootMatchParts, " AND ")
+
+	// PG uses numbered placeholders ($1, $2, ...) so the
+	// subquery can reuse the same $N references without
+	// duplicating args (unlike SQLite's positional ?).
+	subqWhere := "message_count > 0 AND deleted_at IS NULL"
+	if rootMatch != "" {
+		subqWhere += " AND " + rootMatch
+	}
+
+	where := baseWhere + " AND (" + rootMatch +
+		" OR parent_session_id IN" +
+		" (SELECT id FROM agentsview.sessions WHERE " + subqWhere + "))"
+
+	return where, pb.args
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor string.
