@@ -14,25 +14,27 @@ import (
 // Compile-time check: *PGDB satisfies db.Store.
 var _ db.Store = (*PGDB)(nil)
 
-// redactDSN returns a version of the DSN with the password removed.
+// redactDSN returns the host portion of the DSN for diagnostics,
+// stripping credentials, query parameters, and path components
+// that may contain secrets.
 func redactDSN(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "<redacted>"
+		return "<invalid-dsn>"
 	}
-	return u.Redacted()
+	return u.Hostname()
 }
 
 // New opens a PostgreSQL connection and returns a PGDB.
 func New(pgURL string) (*PGDB, error) {
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
-		return nil, fmt.Errorf("opening pg (%s): %w",
+		return nil, fmt.Errorf("opening pg (host=%s): %w",
 			redactDSN(pgURL), err)
 	}
 	if err := pg.Ping(); err != nil {
 		pg.Close()
-		return nil, fmt.Errorf("pg ping (%s): %w",
+		return nil, fmt.Errorf("pg ping (host=%s): %w",
 			redactDSN(pgURL), err)
 	}
 	pg.SetMaxOpenConns(4)

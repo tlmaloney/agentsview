@@ -13,13 +13,15 @@ import (
 	"github.com/wesm/agentsview/internal/db"
 )
 
-// redactDSN returns a version of the DSN with the password removed.
+// redactDSN returns the host portion of the DSN for diagnostics,
+// stripping credentials, query parameters, and path components
+// that may contain secrets.
 func redactDSN(dsn string) string {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "<redacted>"
+		return "<invalid-dsn>"
 	}
-	return u.Redacted()
+	return u.Hostname()
 }
 
 // PGSync manages push-only sync from local SQLite to a remote
@@ -60,7 +62,7 @@ func New(
 	}
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
-		return nil, fmt.Errorf("opening pg connection (%s): %w",
+		return nil, fmt.Errorf("opening pg connection (host=%s): %w",
 			redactDSN(pgURL), err)
 	}
 	pg.SetMaxOpenConns(5)
@@ -74,7 +76,7 @@ func New(
 	defer cancel()
 	if err := pg.PingContext(ctx); err != nil {
 		pg.Close()
-		return nil, fmt.Errorf("pg ping failed (%s): %w",
+		return nil, fmt.Errorf("pg ping failed (host=%s): %w",
 			redactDSN(pgURL), err)
 	}
 

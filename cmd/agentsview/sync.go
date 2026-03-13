@@ -150,11 +150,10 @@ func runPGSync(
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := ps.EnsureSchema(ctx); err != nil {
-		fatal("pg sync schema: %v", err)
-	}
-
 	if cfg.PG {
+		if err := ps.EnsureSchema(ctx); err != nil {
+			fatal("pg sync schema: %v", err)
+		}
 		result, err := ps.Push(ctx, cfg.Full)
 		if err != nil {
 			fatal("pg sync push: %v", err)
