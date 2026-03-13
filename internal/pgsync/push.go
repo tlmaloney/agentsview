@@ -161,6 +161,23 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 			)
 		}
 
+		// Bump updated_at when messages were rewritten so pg-read
+		// SSE watchers detect the change even when message_count
+		// is unchanged (e.g. content rewrites, -full pushes).
+		if msgCount > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE agentsview.sessions
+				SET updated_at = `+pgTimestampSQL("NOW() AT TIME ZONE 'UTC'")+`
+				WHERE id = $1`,
+				s.ID,
+			); err != nil {
+				_ = tx.Rollback()
+				return result, fmt.Errorf(
+					"bumping updated_at for %s: %w", s.ID, err,
+				)
+			}
+		}
+
 		if err := tx.Commit(); err != nil {
 			return result, fmt.Errorf("commit pg tx: %w", err)
 		}
@@ -499,9 +516,10 @@ func (p *PGSync) pushMessages(
 
 		nextOrdinal := msgs[len(msgs)-1].Ordinal + 1
 		if nextOrdinal <= startOrdinal {
-			log.Printf("pgsync: pushMessages %s: ordinal did not advance (start=%d, last=%d); breaking",
-				sessionID, startOrdinal, msgs[len(msgs)-1].Ordinal)
-			break
+			return count, fmt.Errorf(
+				"pushMessages %s: ordinal did not advance (start=%d, last=%d)",
+				sessionID, startOrdinal, msgs[len(msgs)-1].Ordinal,
+			)
 		}
 
 		for _, m := range msgs {

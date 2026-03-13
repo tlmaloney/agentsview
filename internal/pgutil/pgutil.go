@@ -39,8 +39,11 @@ func ParseSSLParams(dsn string) (host, sslmode string) {
 	if u, err := url.Parse(dsn); err == nil && u.Host != "" {
 		return u.Hostname(), u.Query().Get("sslmode")
 	}
-	// Key-value format: host=... sslmode=...
+	// Key-value format: host=... hostaddr=... sslmode=...
 	host = KVParam(dsn, "host")
+	if host == "" {
+		host = KVParam(dsn, "hostaddr")
+	}
 	sslmode = KVParam(dsn, "sslmode")
 	// Unix-socket paths (host=/var/run/...) are local; treat as
 	// loopback so the warning is not triggered.

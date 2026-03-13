@@ -759,6 +759,9 @@ func runServePGRead(cfg config.Config, start time.Time) {
 	}
 	cfg.Port = port
 
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+
 	srv := server.New(cfg, store, nil,
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
@@ -767,6 +770,7 @@ func runServePGRead(cfg config.Config, start time.Time) {
 			ReadOnly:  true,
 		}),
 		server.WithDataDir(cfg.DataDir),
+		server.WithBaseContext(ctx),
 	)
 
 	srvURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
@@ -786,6 +790,7 @@ func runServePGRead(cfg config.Config, start time.Time) {
 	select {
 	case sig := <-sigCh:
 		log.Printf("received %v, shutting down", sig)
+		ctxCancel()
 	case err := <-serveErrCh:
 		if err != nil && err != http.ErrServerClosed {
 			fatal("server error: %v", err)
