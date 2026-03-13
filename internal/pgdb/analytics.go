@@ -1809,11 +1809,19 @@ func (p *PGDB) GetAnalyticsTopSessions(
 		orderExpr = "message_count DESC, id ASC"
 	}
 
+	// When time-of-day/day-of-week filtering is active, skip
+	// the SQL LIMIT so the Go-side filter sees all candidates.
+	// Without time filters, LIMIT 1000 is safe since the SQL
+	// ORDER BY already produces the correct ranking.
+	limitClause := " LIMIT 1000"
+	if f.HasTimeFilter() {
+		limitClause = ""
+	}
 	query := `SELECT id, ` + pgDateCol + `, project,
 		first_message, message_count,
 		started_at, ended_at
 		FROM agentsview.sessions WHERE ` + where +
-		` ORDER BY ` + orderExpr + ` LIMIT 1000`
+		` ORDER BY ` + orderExpr + limitClause
 
 	rows, err := p.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
