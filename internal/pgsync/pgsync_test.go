@@ -358,7 +358,7 @@ func TestNewRejectsEmptyMachine(t *testing.T) {
 
 func TestNewRejectsEmptyURL(t *testing.T) {
 	local := testDB(t)
-	_, err := New("", local, "test", time.Hour)
+	_, err := New("", local, "test", time.Hour, true)
 	if err == nil {
 		t.Fatal("expected error for empty URL")
 	}
