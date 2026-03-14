@@ -14,7 +14,7 @@ func TestPGConnectivity(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "connectivity-test-machine", time.Hour)
+	ps, err := New(pgURL, local, "connectivity-test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}

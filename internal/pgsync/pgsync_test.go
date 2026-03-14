@@ -50,7 +50,7 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestPushSingleSession(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestPushIdempotent(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestPushWithToolCalls(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestStatus(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestStatusMissingSchema(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
@@ -556,7 +556,7 @@ func TestPushSimplePK(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "test-machine", time.Hour)
+	ps, err := New(pgURL, local, "test-machine", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}

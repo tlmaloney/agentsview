@@ -108,7 +108,7 @@ func ensureSchema(t *testing.T, pgURL string) {
 
 func TestNew(t *testing.T) {
 	pgURL := testPGURL(t)
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestListSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestGetSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestGetMessages(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestGetStats(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestSearch(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestGetMinimap(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestAnalyticsSummary(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureSchema(t, pgURL)
 
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestAnalyticsSummary(t *testing.T) {
 
 func TestWriteMethodsReturnReadOnly(t *testing.T) {
 	pgURL := testPGURL(t)
-	store, err := New(pgURL)
+	store, err := New(pgURL, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
