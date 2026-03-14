@@ -341,7 +341,7 @@ func TestStatusMissingSchema(t *testing.T) {
 func TestNewRejectsMachineLocal(t *testing.T) {
 	pgURL := testPGURL(t)
 	local := testDB(t)
-	_, err := New(pgURL, local, "local", time.Hour)
+	_, err := New(pgURL, local, "local", time.Hour, true)
 	if err == nil {
 		t.Fatal("expected error for machine=local")
 	}
@@ -350,7 +350,7 @@ func TestNewRejectsMachineLocal(t *testing.T) {
 func TestNewRejectsEmptyMachine(t *testing.T) {
 	pgURL := testPGURL(t)
 	local := testDB(t)
-	_, err := New(pgURL, local, "", time.Hour)
+	_, err := New(pgURL, local, "", time.Hour, true)
 	if err == nil {
 		t.Fatal("expected error for empty machine")
 	}
@@ -419,7 +419,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "machine-a", time.Hour)
+	ps, err := New(pgURL, local, "machine-a", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}

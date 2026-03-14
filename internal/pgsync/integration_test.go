@@ -43,7 +43,7 @@ func TestPGPushCycle(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, local, "machine-a", time.Hour)
+	ps, err := New(pgURL, local, "machine-a", time.Hour, true)
 	if err != nil {
 		t.Fatalf("creating pgsync: %v", err)
 	}
