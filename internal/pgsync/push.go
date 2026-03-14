@@ -74,11 +74,13 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	for _, s := range allSessions {
 		sessionByID[s.ID] = s
 	}
+	var priorFingerprints map[string]string
 	if lastPush != "" {
 		boundaryState, ok, err := readPushBoundaryState(p.local, lastPush)
 		if err != nil {
 			return result, err
 		}
+		priorFingerprints = boundaryState
 		windowStart, err := previousLocalSyncTimestamp(lastPush)
 		if err != nil {
 			return result, fmt.Errorf(
@@ -115,6 +117,17 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 				continue
 			}
 			sessionByID[s.ID] = s
+		}
+	}
+
+	// Skip sessions already pushed with unchanged fingerprints.
+	// This avoids redundant re-pushes when the watermark is held
+	// back due to errors on a prior push cycle.
+	if len(priorFingerprints) > 0 {
+		for id, s := range sessionByID {
+			if priorFingerprints[id] == sessionPushFingerprint(s) {
+				delete(sessionByID, id)
+			}
 		}
 	}
 
@@ -240,9 +253,6 @@ func writePushBoundaryState(local syncStateStore, cutoff string, sessions []db.S
 		Fingerprints: make(map[string]string),
 	}
 	for _, s := range sessions {
-		if localSessionSyncMarker(s) != cutoff {
-			continue
-		}
 		state.Fingerprints[s.ID] = sessionPushFingerprint(s)
 	}
 	data, err := json.Marshal(state)
