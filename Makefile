@@ -11,7 +11,7 @@ LDFLAGS := -X main.version=$(VERSION) \
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
 
-.PHONY: build build-release install frontend frontend-dev dev desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-app test test-short e2e vet lint tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir help
+.PHONY: build build-release install frontend frontend-dev dev desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short e2e vet lint tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -112,6 +112,24 @@ desktop-windows-installer:
 		-exec cp {} $(DESKTOP_DIST_DIR)/windows/ \;; \
 	echo "Copied $$exe_count Windows installer(s) to $(DESKTOP_DIST_DIR)/windows/"
 
+# Build Linux AppImage bundle
+# Run on a Linux host.
+desktop-linux-appimage:
+	cd desktop && npm install && npm run tauri:build:linux \
+		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
+	mkdir -p $(DESKTOP_DIST_DIR)/linux
+	rm -f $(DESKTOP_DIST_DIR)/linux/*.AppImage
+	@ai_count=$$(find desktop/src-tauri/target/release/bundle/appimage \
+		-maxdepth 1 -type f -name '*.AppImage' | wc -l | tr -d ' '); \
+	if [ "$$ai_count" -eq 0 ]; then \
+		echo "error: no AppImage found in bundle output" >&2; \
+		exit 1; \
+	fi; \
+	find desktop/src-tauri/target/release/bundle/appimage \
+		-maxdepth 1 -type f -name '*.AppImage' \
+		-exec cp {} $(DESKTOP_DIST_DIR)/linux/ \;; \
+	echo "Copied $$ai_count AppImage(s) to $(DESKTOP_DIST_DIR)/linux/"
+
 # Backward-compatible alias (macOS .app)
 desktop-app: desktop-macos-app
 
@@ -201,6 +219,7 @@ help:
 	@echo "  desktop-macos-app - Build macOS .app bundle only"
 	@echo "  desktop-macos-dmg - Build macOS DMG installer"
 	@echo "  desktop-windows-installer - Build Windows NSIS installer"
+	@echo "  desktop-linux-appimage - Build Linux AppImage"
 	@echo "  desktop-app    - Alias for desktop-macos-app"
 	@echo ""
 	@echo "  test           - Run all tests"

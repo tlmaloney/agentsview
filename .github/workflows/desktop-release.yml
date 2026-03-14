@@ -191,9 +191,76 @@ jobs:
           path: staging/*
           if-no-files-found: error
 
+  build-linux:
+    name: Desktop Build (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: "24"
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libappindicator3-dev librsvg2-dev \
+            patchelf
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Prepare sidecar
+        env:
+          AGENTSVIEW_VERSION: ${{ github.ref_name }}
+        run: npm run prepare-sidecar
+        working-directory: desktop
+
+      - name: Patch updater config for current repository
+        env:
+          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+        run: |
+          sed -i.bak \
+            -e "s|wesm/agentsview|${GITHUB_REPOSITORY}|g" \
+            -e "s|NOT_SET|${AGENTSVIEW_UPDATER_PUBKEY}|g" \
+            desktop/src-tauri/tauri.conf.json
+          rm -f desktop/src-tauri/tauri.conf.json.bak
+
+      - name: Build AppImage and updater bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AGENTSVIEW_UPDATER_PUBKEY: ${{ secrets.AGENTSVIEW_UPDATER_PUBKEY }}
+        run: npx tauri build --bundles appimage
+        working-directory: desktop
+
+      - name: Collect build artifacts
+        run: |
+          mkdir -p staging
+          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage staging/
+          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz staging/
+          cp desktop/src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz.sig staging/
+          ls -la staging/
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: agentsview-desktop-linux
+          path: staging/*
+          if-no-files-found: error
+
   release:
     name: Upload Desktop Installers
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -207,7 +274,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.dmg *.exe *.tar.gz *.nsis.zip > SHA256SUMS-desktop 2>/dev/null || true
+          sha256sum *.dmg *.exe *.AppImage *.tar.gz *.nsis.zip > SHA256SUMS-desktop 2>/dev/null || true
           cat SHA256SUMS-desktop
 
       - name: Generate updater manifest
@@ -221,6 +288,8 @@ jobs:
           MACOS_URL=""
           WINDOWS_SIG=""
           WINDOWS_URL=""
+          LINUX_SIG=""
+          LINUX_URL=""
 
           for f in artifacts/*.app.tar.gz.sig; do
             if [ -f "$f" ]; then
@@ -238,12 +307,24 @@ jobs:
             fi
           done
 
+          for f in artifacts/*.AppImage.tar.gz.sig; do
+            if [ -f "$f" ]; then
+              LINUX_SIG="$(cat "$f")"
+              LINUX_TARBALL="$(basename "${f%.sig}")"
+              LINUX_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${LINUX_TARBALL}"
+            fi
+          done
+
           if [ -z "$MACOS_SIG" ] || [ -z "$MACOS_URL" ]; then
             echo "error: missing macOS updater signature or URL" >&2
             exit 1
           fi
           if [ -z "$WINDOWS_SIG" ] || [ -z "$WINDOWS_URL" ]; then
             echo "error: missing Windows updater signature or URL" >&2
+            exit 1
+          fi
+          if [ -z "$LINUX_SIG" ] || [ -z "$LINUX_URL" ]; then
+            echo "error: missing Linux updater signature or URL" >&2
             exit 1
           fi
 
@@ -259,6 +340,10 @@ jobs:
               "windows-x86_64": {
                 "url": "${WINDOWS_URL}",
                 "signature": "${WINDOWS_SIG}"
+              },
+              "linux-x86_64": {
+                "url": "${LINUX_URL}",
+                "signature": "${LINUX_SIG}"
               }
             }
           }
@@ -273,6 +358,7 @@ jobs:
           files: |
             artifacts/*.dmg
             artifacts/*.exe
+            artifacts/*.AppImage
             artifacts/SHA256SUMS-desktop
 
       - name: Upload updater artifacts
@@ -296,4 +382,6 @@ jobs:
             artifacts/*.app.tar.gz.sig \
             artifacts/*.nsis.zip \
             artifacts/*.nsis.zip.sig \
+            artifacts/*.AppImage.tar.gz \
+            artifacts/*.AppImage.tar.gz.sig \
             artifacts/latest.json
