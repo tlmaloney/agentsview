@@ -14,6 +14,8 @@ func TestCheckSSL(t *testing.T) {
 		{"empty host defaults local", "", false},
 		{"remote with require", "postgres://user:pass@remote:5432/db?sslmode=require", false},
 		{"remote with verify-full", "postgres://user:pass@remote:5432/db?sslmode=verify-full", false},
+		// No explicit sslmode defaults to prefer, which has a plaintext fallback.
+		{"remote no sslmode", "postgres://user:pass@remote:5432/db", true},
 		{"remote sslmode=disable", "postgres://user:pass@remote:5432/db?sslmode=disable", true},
 		// prefer and allow have plaintext fallback paths and are rejected.
 		{"remote sslmode=prefer", "postgres://user:pass@remote:5432/db?sslmode=prefer", true},
