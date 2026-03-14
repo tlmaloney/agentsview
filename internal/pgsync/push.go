@@ -74,13 +74,16 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	for _, s := range allSessions {
 		sessionByID[s.ID] = s
 	}
-	var priorFingerprints map[string]string
+	// Read fingerprints unconditionally so that partial failures
+	// on the first push (lastPush == "") are still deduplicated
+	// on the next cycle via boundary state.
+	priorFingerprints := readPushedFingerprints(p.local)
+
 	if lastPush != "" {
 		boundaryState, ok, err := readPushBoundaryState(p.local, lastPush)
 		if err != nil {
 			return result, err
 		}
-		priorFingerprints = boundaryState
 		windowStart, err := previousLocalSyncTimestamp(lastPush)
 		if err != nil {
 			return result, fmt.Errorf(
@@ -227,6 +230,22 @@ func finalizePushState(local syncStateStore, cutoff string, sessions []db.Sessio
 		return err
 	}
 	return nil
+}
+
+// readPushedFingerprints returns fingerprints from the last stored
+// boundary state, regardless of whether the cutoff matches. This
+// allows fingerprint-based deduplication even when lastPush is
+// empty (first push with partial failure).
+func readPushedFingerprints(local syncStateStore) map[string]string {
+	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
+	if err != nil || raw == "" {
+		return nil
+	}
+	var state pushBoundaryState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return nil
+	}
+	return state.Fingerprints
 }
 
 func readPushBoundaryState(local syncStateStore, cutoff string) (map[string]string, bool, error) {

@@ -54,10 +54,11 @@ type ProxyConfig struct {
 
 // PGSyncConfig holds PostgreSQL sync settings.
 type PGSyncConfig struct {
-	Enabled     *bool  `json:"enabled,omitempty"`
-	PostgresURL string `json:"postgres_url"`
-	Interval    string `json:"interval"`
-	MachineName string `json:"machine_name"`
+	Enabled         *bool  `json:"enabled,omitempty"`
+	PostgresURL     string `json:"postgres_url"`
+	Interval        string `json:"interval"`
+	MachineName     string `json:"machine_name"`
+	AllowInsecurePG bool   `json:"allow_insecure_pg,omitempty"`
 }
 
 // IsEnabled returns whether PG sync is enabled. When Enabled is nil
@@ -281,6 +282,9 @@ func (c *Config) loadFile() error {
 	}
 	if file.PGSync.Interval != "" && c.PGSync.Interval == "" {
 		c.PGSync.Interval = file.PGSync.Interval
+	}
+	if file.PGSync.AllowInsecurePG {
+		c.PGSync.AllowInsecurePG = true
 	}
 
 	// Parse config-file dir arrays for agents that have a

@@ -43,9 +43,11 @@ type PGSync struct {
 // New creates a PGSync instance and verifies the PG connection.
 // The machine name must not be "local", which is reserved as the
 // SQLite sentinel for sessions that originated on this machine.
+// When allowInsecure is true, non-loopback connections without TLS
+// produce a warning instead of failing.
 func New(
 	pgURL string, local *db.DB, machine string,
-	interval time.Duration,
+	interval time.Duration, allowInsecure bool,
 ) (*PGSync, error) {
 	if pgURL == "" {
 		return nil, fmt.Errorf("postgres URL is required")
@@ -58,7 +60,11 @@ func New(
 			"machine name %q is reserved; choose a different pg_sync.machine_name", machine,
 		)
 	}
-	pgutil.WarnInsecureSSL(pgURL)
+	if allowInsecure {
+		pgutil.WarnInsecureSSL(pgURL)
+	} else if err := pgutil.CheckSSL(pgURL); err != nil {
+		return nil, err
+	}
 	if local == nil {
 		return nil, fmt.Errorf("local db is required")
 	}

@@ -140,7 +140,7 @@ func runPGSync(
 
 	ps, err := pgsync.New(
 		pgCfg.PostgresURL, database, pgCfg.MachineName,
-		interval,
+		interval, pgCfg.AllowInsecurePG,
 	)
 	if err != nil {
 		fatal("pg sync: %v", err)

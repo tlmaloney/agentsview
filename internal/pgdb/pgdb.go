@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -16,13 +17,17 @@ var _ db.Store = (*PGDB)(nil)
 
 // New opens a PostgreSQL connection and returns a PGDB.
 func New(pgURL string) (*PGDB, error) {
-	pgutil.WarnInsecureSSL(pgURL)
+	if err := pgutil.CheckSSL(pgURL); err != nil {
+		return nil, err
+	}
 	pg, err := sql.Open("pgx", pgURL)
 	if err != nil {
 		return nil, fmt.Errorf("opening pg (host=%s): %w",
 			pgutil.RedactDSN(pgURL), err)
 	}
-	if err := pg.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := pg.PingContext(ctx); err != nil {
 		pg.Close()
 		return nil, fmt.Errorf("pg ping (host=%s): %w",
 			pgutil.RedactDSN(pgURL), err)

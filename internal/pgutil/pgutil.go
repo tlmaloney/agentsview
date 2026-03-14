@@ -1,6 +1,7 @@
 package pgutil
 
 import (
+	"fmt"
 	"log"
 	"net/url"
 	"strings"
@@ -15,6 +16,26 @@ func RedactDSN(dsn string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// CheckSSL returns an error when the PG connection string targets
+// a non-loopback host without TLS encryption. Callers should fail
+// startup on error unless the user has explicitly opted into
+// insecure connections.
+func CheckSSL(dsn string) error {
+	host, mode := ParseSSLParams(dsn)
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return nil
+	}
+	if mode == "" || mode == "disable" || mode == "prefer" || mode == "allow" {
+		return fmt.Errorf(
+			"pg connection to %s uses sslmode=%q; "+
+				"set sslmode=require (or verify-full) for non-local hosts, "+
+				"or set allow_insecure_pg: true in config to override",
+			host, mode,
+		)
+	}
+	return nil
 }
 
 // WarnInsecureSSL logs a warning when the PG connection string

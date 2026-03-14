@@ -266,7 +266,7 @@ func runServe(args []string) {
 		} else {
 			ps, pgErr := pgsync.New(
 				pgCfg.PostgresURL, database, pgCfg.MachineName,
-				interval,
+				interval, pgCfg.AllowInsecurePG,
 			)
 			if pgErr != nil {
 				log.Printf("warning: pg sync disabled: %v", pgErr)
