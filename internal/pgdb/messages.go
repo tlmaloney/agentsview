@@ -143,6 +143,9 @@ func (p *PGDB) Search(
 	}
 
 	searchTerm := stripFTSQuotes(f.Query)
+	if searchTerm == "" {
+		return db.SearchPage{}, nil
+	}
 
 	// $1 = ILIKE-escaped term (for WHERE), $2 = raw term (for
 	// POSITION snippet extraction which must not see escape chars).
