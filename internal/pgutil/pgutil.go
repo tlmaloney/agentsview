@@ -62,13 +62,16 @@ func ParseSSLParams(dsn string) (host, sslmode string) {
 	if u, err := url.Parse(dsn); err == nil && (u.Host != "" || u.Scheme == "postgres" || u.Scheme == "postgresql") {
 		host = u.Hostname()
 		sslmode = u.Query().Get("sslmode")
+		// When hostaddr is present (in authority or query), it
+		// determines the actual network address the driver connects
+		// to, even if host is loopback. Prefer it for SSL checks.
+		if ha := u.Query().Get("hostaddr"); ha != "" {
+			host = ha
+		}
 		if host == "" {
 			// Empty authority: host may be in query params
 			// (e.g. postgres:///db?host=remote&sslmode=disable).
 			host = u.Query().Get("host")
-			if host == "" {
-				host = u.Query().Get("hostaddr")
-			}
 		}
 		if strings.HasPrefix(host, "/") {
 			host = ""
@@ -76,9 +79,11 @@ func ParseSSLParams(dsn string) (host, sslmode string) {
 		return host, sslmode
 	}
 	// Key-value format: host=... hostaddr=... sslmode=...
-	host = KVParam(dsn, "host")
+	// Prefer hostaddr over host since it determines the actual
+	// network address the driver connects to.
+	host = KVParam(dsn, "hostaddr")
 	if host == "" {
-		host = KVParam(dsn, "hostaddr")
+		host = KVParam(dsn, "host")
 	}
 	sslmode = KVParam(dsn, "sslmode")
 	// Unix-socket paths (host=/var/run/...) are local; treat as

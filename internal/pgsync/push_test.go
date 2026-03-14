@@ -79,7 +79,10 @@ func TestReadPushBoundaryStateValidity(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, got, valid := readBoundaryAndFingerprints(syncStateReaderStub{value: tc.raw}, cutoff)
+			_, got, valid, err := readBoundaryAndFingerprints(syncStateReaderStub{value: tc.raw}, cutoff)
+			if err != nil {
+				t.Fatalf("readBoundaryAndFingerprints: %v", err)
+			}
 			if valid != tc.wantValid {
 				t.Fatalf("valid = %v, want %v", valid, tc.wantValid)
 			}
@@ -191,7 +194,7 @@ func TestFinalizePushStatePersistsEmptyBoundary(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
 	store := &syncStateStoreStub{}
-	if err := finalizePushState(store, cutoff, nil); err != nil {
+	if err := finalizePushState(store, cutoff, nil, nil); err != nil {
 		t.Fatalf("finalizePushState: %v", err)
 	}
 	if got := store.values["last_push_at"]; got != cutoff {

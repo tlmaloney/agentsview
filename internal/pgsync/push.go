@@ -82,9 +82,16 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	var boundaryState map[string]string
 	var boundaryOK bool
 	if !full {
-		priorFingerprints, boundaryState, boundaryOK = readBoundaryAndFingerprints(p.local, lastPush)
+		var bErr error
+		priorFingerprints, boundaryState, boundaryOK, bErr = readBoundaryAndFingerprints(p.local, lastPush)
+		if bErr != nil {
+			return result, bErr
+		}
 	}
 
+	// When full=true, lastPush is "" so this block is skipped.
+	// boundaryOK stays false, causing all boundary sessions to
+	// be conservatively re-pushed — the intended -full behavior.
 	if lastPush != "" {
 		ok := boundaryOK
 		windowStart, err := previousLocalSyncTimestamp(lastPush)
@@ -147,7 +154,7 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	})
 
 	if len(sessions) == 0 {
-		if err := finalizePushState(p.local, cutoff, sessions); err != nil {
+		if err := finalizePushState(p.local, cutoff, sessions, nil); err != nil {
 			return result, err
 		}
 		result.Duration = time.Since(start)
@@ -217,7 +224,15 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	if result.Errors > 0 {
 		finalizeCutoff = lastPush
 	}
-	if err := finalizePushState(p.local, finalizeCutoff, pushed); err != nil {
+	// When the cutoff is held back (errors kept watermark at
+	// lastPush), merge prior fingerprints with newly pushed ones
+	// so sessions from earlier successful retries are not
+	// re-pushed on subsequent cycles.
+	var mergedFingerprints map[string]string
+	if finalizeCutoff == lastPush && len(priorFingerprints) > 0 {
+		mergedFingerprints = priorFingerprints
+	}
+	if err := finalizePushState(p.local, finalizeCutoff, pushed, mergedFingerprints); err != nil {
 		return result, err
 	}
 
@@ -225,11 +240,11 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	return result, nil
 }
 
-func finalizePushState(local syncStateStore, cutoff string, sessions []db.Session) error {
+func finalizePushState(local syncStateStore, cutoff string, sessions []db.Session, priorFingerprints map[string]string) error {
 	if err := local.SetSyncState("last_push_at", cutoff); err != nil {
 		return fmt.Errorf("updating last_push_at: %w", err)
 	}
-	if err := writePushBoundaryState(local, cutoff, sessions); err != nil {
+	if err := writePushBoundaryState(local, cutoff, sessions, priorFingerprints); err != nil {
 		return err
 	}
 	return nil
@@ -244,27 +259,38 @@ func readBoundaryAndFingerprints(local syncStateStore, cutoff string) (
 	fingerprints map[string]string,
 	boundary map[string]string,
 	boundaryOK bool,
+	err error,
 ) {
 	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
-	if err != nil || raw == "" {
-		return nil, nil, false
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("reading %s: %w", lastPushBoundaryStateKey, err)
+	}
+	if raw == "" {
+		return nil, nil, false, nil
 	}
 	var state pushBoundaryState
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return nil, nil, false
+		return nil, nil, false, nil
 	}
 	fingerprints = state.Fingerprints
 	if cutoff != "" && state.Cutoff == cutoff && state.Fingerprints != nil {
 		boundary = state.Fingerprints
 		boundaryOK = true
 	}
-	return fingerprints, boundary, boundaryOK
+	return fingerprints, boundary, boundaryOK, nil
 }
 
-func writePushBoundaryState(local syncStateStore, cutoff string, sessions []db.Session) error {
+// writePushBoundaryState persists boundary fingerprints. When
+// priorFingerprints is non-nil, its entries are merged with the
+// newly pushed sessions so that earlier successful retries are
+// preserved across repeated partial-failure cycles.
+func writePushBoundaryState(local syncStateStore, cutoff string, sessions []db.Session, priorFingerprints map[string]string) error {
 	state := pushBoundaryState{
 		Cutoff:       cutoff,
-		Fingerprints: make(map[string]string),
+		Fingerprints: make(map[string]string, len(priorFingerprints)+len(sessions)),
+	}
+	for id, fp := range priorFingerprints {
+		state.Fingerprints[id] = fp
 	}
 	for _, s := range sessions {
 		state.Fingerprints[s.ID] = sessionPushFingerprint(s)
