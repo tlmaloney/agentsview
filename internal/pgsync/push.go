@@ -74,16 +74,19 @@ func (p *PGSync) Push(ctx context.Context, full bool) (PushResult, error) {
 	for _, s := range allSessions {
 		sessionByID[s.ID] = s
 	}
-	// Read fingerprints unconditionally so that partial failures
-	// on the first push (lastPush == "") are still deduplicated
-	// on the next cycle via boundary state.
-	priorFingerprints := readPushedFingerprints(p.local)
+	// Read boundary state once to get both the cutoff-validated
+	// map (for boundary replay) and the raw fingerprints (for
+	// general dedup). Skip when full=true so -full re-pushes
+	// everything.
+	var priorFingerprints map[string]string
+	var boundaryState map[string]string
+	var boundaryOK bool
+	if !full {
+		priorFingerprints, boundaryState, boundaryOK = readBoundaryAndFingerprints(p.local, lastPush)
+	}
 
 	if lastPush != "" {
-		boundaryState, ok, err := readPushBoundaryState(p.local, lastPush)
-		if err != nil {
-			return result, err
-		}
+		ok := boundaryOK
 		windowStart, err := previousLocalSyncTimestamp(lastPush)
 		if err != nil {
 			return result, fmt.Errorf(
@@ -232,38 +235,30 @@ func finalizePushState(local syncStateStore, cutoff string, sessions []db.Sessio
 	return nil
 }
 
-// readPushedFingerprints returns fingerprints from the last stored
-// boundary state, regardless of whether the cutoff matches. This
-// allows fingerprint-based deduplication even when lastPush is
-// empty (first push with partial failure).
-func readPushedFingerprints(local syncStateStore) map[string]string {
+// readBoundaryAndFingerprints reads the stored push boundary state
+// once and returns both the raw fingerprints (for general dedup,
+// regardless of cutoff) and the cutoff-validated boundary state
+// (for boundary replay). This avoids redundant reads of the same
+// sync state key.
+func readBoundaryAndFingerprints(local syncStateStore, cutoff string) (
+	fingerprints map[string]string,
+	boundary map[string]string,
+	boundaryOK bool,
+) {
 	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
 	if err != nil || raw == "" {
-		return nil
+		return nil, nil, false
 	}
 	var state pushBoundaryState
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return nil
+		return nil, nil, false
 	}
-	return state.Fingerprints
-}
-
-func readPushBoundaryState(local syncStateStore, cutoff string) (map[string]string, bool, error) {
-	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
-	if err != nil {
-		return nil, false, fmt.Errorf("reading %s: %w", lastPushBoundaryStateKey, err)
+	fingerprints = state.Fingerprints
+	if cutoff != "" && state.Cutoff == cutoff && state.Fingerprints != nil {
+		boundary = state.Fingerprints
+		boundaryOK = true
 	}
-	if raw == "" {
-		return map[string]string{}, false, nil
-	}
-	var state pushBoundaryState
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return map[string]string{}, false, nil
-	}
-	if state.Cutoff != cutoff || state.Fingerprints == nil {
-		return map[string]string{}, false, nil
-	}
-	return state.Fingerprints, true, nil
+	return fingerprints, boundary, boundaryOK
 }
 
 func writePushBoundaryState(local syncStateStore, cutoff string, sessions []db.Session) error {

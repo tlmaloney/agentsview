@@ -16,8 +16,12 @@ import (
 var _ db.Store = (*PGDB)(nil)
 
 // New opens a PostgreSQL connection and returns a PGDB.
-func New(pgURL string) (*PGDB, error) {
-	if err := pgutil.CheckSSL(pgURL); err != nil {
+// When allowInsecure is true, non-loopback connections without TLS
+// produce a warning instead of failing.
+func New(pgURL string, allowInsecure bool) (*PGDB, error) {
+	if allowInsecure {
+		pgutil.WarnInsecureSSL(pgURL)
+	} else if err := pgutil.CheckSSL(pgURL); err != nil {
 		return nil, err
 	}
 	pg, err := sql.Open("pgx", pgURL)

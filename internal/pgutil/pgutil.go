@@ -55,10 +55,25 @@ func WarnInsecureSSL(dsn string) {
 }
 
 // ParseSSLParams extracts host and sslmode from a DSN. It tries
-// URI format first, then falls back to key-value format.
+// URI format first, then falls back to key-value format. For URI
+// DSNs with an empty authority (postgres:///db?host=remote), the
+// host is read from query parameters.
 func ParseSSLParams(dsn string) (host, sslmode string) {
-	if u, err := url.Parse(dsn); err == nil && u.Host != "" {
-		return u.Hostname(), u.Query().Get("sslmode")
+	if u, err := url.Parse(dsn); err == nil && (u.Host != "" || u.Scheme == "postgres" || u.Scheme == "postgresql") {
+		host = u.Hostname()
+		sslmode = u.Query().Get("sslmode")
+		if host == "" {
+			// Empty authority: host may be in query params
+			// (e.g. postgres:///db?host=remote&sslmode=disable).
+			host = u.Query().Get("host")
+			if host == "" {
+				host = u.Query().Get("hostaddr")
+			}
+		}
+		if strings.HasPrefix(host, "/") {
+			host = ""
+		}
+		return host, sslmode
 	}
 	// Key-value format: host=... hostaddr=... sslmode=...
 	host = KVParam(dsn, "host")

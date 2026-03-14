@@ -700,6 +700,7 @@ func runServePGRead(cfg config.Config, start time.Time) {
 	if cfg.PGSync.PostgresURL != "" {
 		log.Println("warning: pg_sync config is ignored in pg-read mode")
 	}
+	allowInsecurePG := cfg.PGSync.AllowInsecurePG
 	cfg.RemoteAccess = false
 	cfg.AuthToken = ""
 	cfg.PublicURL = ""
@@ -713,7 +714,7 @@ func runServePGRead(cfg config.Config, start time.Time) {
 		fatal("pg-read mode requires a loopback host (127.0.0.1, localhost, ::1); got %q", cfg.Host)
 	}
 
-	store, err := pgdb.New(cfg.PGReadURL)
+	store, err := pgdb.New(cfg.PGReadURL, allowInsecurePG)
 	if err != nil {
 		fatal("pg read: %v", err)
 	}

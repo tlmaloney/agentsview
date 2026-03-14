@@ -40,6 +40,21 @@ func TestParseSSLParams(t *testing.T) {
 			"", "disable",
 		},
 		{
+			"uri empty authority host in query",
+			"postgres:///db?host=remote&sslmode=disable",
+			"remote", "disable",
+		},
+		{
+			"uri empty authority hostaddr in query",
+			"postgres:///db?hostaddr=10.0.0.1&sslmode=require",
+			"10.0.0.1", "require",
+		},
+		{
+			"uri empty authority unix socket in query",
+			"postgres:///db?host=/var/run/postgresql&sslmode=disable",
+			"", "disable",
+		},
+		{
 			"empty dsn",
 			"",
 			"", "",
@@ -77,6 +92,9 @@ func TestCheckSSL(t *testing.T) {
 		{"kv remote require", "host=remote sslmode=require", false},
 		{"kv remote disable", "host=remote sslmode=disable", true},
 		{"kv unix socket", "host=/var/run/postgresql sslmode=disable", false},
+		{"uri query host no ssl", "postgres:///db?host=remote", true},
+		{"uri query host disable", "postgres:///db?host=remote&sslmode=disable", true},
+		{"uri query host require", "postgres:///db?host=remote&sslmode=require", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

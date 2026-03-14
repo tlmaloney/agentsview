@@ -79,10 +79,7 @@ func TestReadPushBoundaryStateValidity(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, valid, err := readPushBoundaryState(syncStateReaderStub{value: tc.raw}, cutoff)
-			if err != nil {
-				t.Fatalf("readPushBoundaryState: %v", err)
-			}
+			_, got, valid := readBoundaryAndFingerprints(syncStateReaderStub{value: tc.raw}, cutoff)
 			if valid != tc.wantValid {
 				t.Fatalf("valid = %v, want %v", valid, tc.wantValid)
 			}
