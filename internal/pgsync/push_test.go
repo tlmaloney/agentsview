@@ -217,3 +217,44 @@ func TestFinalizePushStatePersistsEmptyBoundary(t *testing.T) {
 		t.Fatalf("boundary fingerprints = %v, want empty", state.Fingerprints)
 	}
 }
+
+func TestFinalizePushStateMergesPriorFingerprints(t *testing.T) {
+	const cutoff = "2026-03-11T12:34:56.123Z"
+
+	// Simulate cycle-1 success for sess-001.
+	priorFingerprints := map[string]string{
+		"sess-001": "fp-001",
+	}
+
+	// Simulate cycle-2 success for sess-002 (sess-001 unchanged).
+	cycle2Sessions := []db.Session{
+		{ID: "sess-002", CreatedAt: "2026-03-11T12:00:00Z", MessageCount: 3},
+	}
+
+	store := &syncStateStoreStub{}
+	if err := finalizePushState(store, cutoff, cycle2Sessions, priorFingerprints); err != nil {
+		t.Fatalf("finalizePushState: %v", err)
+	}
+
+	raw := store.values[lastPushBoundaryStateKey]
+	if raw == "" {
+		t.Fatal("last_push_boundary_state should be written")
+	}
+
+	var state pushBoundaryState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		t.Fatalf("unmarshal boundary state: %v", err)
+	}
+
+	// Both cycle-1 and cycle-2 fingerprints should be present.
+	if len(state.Fingerprints) != 2 {
+		t.Fatalf("len(fingerprints) = %d, want 2", len(state.Fingerprints))
+	}
+	if state.Fingerprints["sess-001"] != "fp-001" {
+		t.Fatalf("sess-001 fingerprint = %q, want %q",
+			state.Fingerprints["sess-001"], "fp-001")
+	}
+	if _, ok := state.Fingerprints["sess-002"]; !ok {
+		t.Fatal("sess-002 fingerprint should be present")
+	}
+}

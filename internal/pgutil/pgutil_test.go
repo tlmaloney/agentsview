@@ -98,6 +98,7 @@ func TestCheckSSL(t *testing.T) {
 		{"kv hostaddr overrides loopback host", "host=localhost hostaddr=203.0.113.10 sslmode=disable", true},
 		{"uri hostaddr overrides loopback host", "postgres://localhost:5432/db?hostaddr=203.0.113.10&sslmode=disable", true},
 		{"uri query hostaddr overrides loopback host", "postgres:///db?host=localhost&hostaddr=203.0.113.10&sslmode=disable", true},
+		{"uri loopback hostaddr overrides remote host", "postgres://remote:5432/db?hostaddr=127.0.0.1&sslmode=disable", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
