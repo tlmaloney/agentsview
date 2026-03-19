@@ -73,6 +73,13 @@ func (db *DB) Search(
 	// GROUP BY. We use a subquery to select the best-ranked FTS rowid per
 	// session, then join back to the FTS table to call snippet() on that
 	// specific row.
+	//
+	// The outer JOIN messages_fts must also include a MATCH clause. Without it,
+	// SQLite FTS5 scans all internal index segments and can return the same
+	// rowid multiple times (once per segment), causing duplicate results even
+	// though best_rowid is unique per session. The MATCH constrains the FTS5
+	// scan to documents matching the query, ensuring exactly one row per rowid
+	// and providing query context required by snippet().
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent,
 			COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
@@ -94,13 +101,15 @@ func (db *DB) Search(
 		JOIN messages_fts ON messages_fts.rowid = best.best_rowid
 		JOIN messages m ON m.id = best.best_rowid
 		JOIN sessions s ON m.session_id = s.id
+		WHERE messages_fts MATCH ?
 		ORDER BY %s
 		LIMIT ? OFFSET ?`,
 		snippetTokenLength,
 		strings.Join(innerWhere, " AND "),
 		orderBy,
 	)
-	args = append(args, f.Limit+1, f.Cursor)
+	// Append the outer MATCH arg before LIMIT/OFFSET.
+	args = append(args, f.Query, f.Limit+1, f.Cursor)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
