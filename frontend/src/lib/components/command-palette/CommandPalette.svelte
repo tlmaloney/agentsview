@@ -10,6 +10,7 @@
     sanitizeSnippet,
   } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
+  import { copyToClipboard } from "../../utils/clipboard.js";
   import type { Session, SearchResult } from "../../api/types.js";
 
   let inputRef: HTMLInputElement | undefined = $state(undefined);
@@ -154,6 +155,18 @@
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">No results</div>
         {:else}
+          <div class="palette-sort">
+            <button
+              class="sort-btn"
+              class:active={searchStore.sort === "relevance"}
+              onclick={() => searchStore.setSort("relevance")}
+            >Relevance</button>
+            <button
+              class="sort-btn"
+              class:active={searchStore.sort === "recency"}
+              onclick={() => searchStore.setSort("recency")}
+            >Recency</button>
+          </div>
           {#each searchStore.results as result, i}
             <button
               class="palette-item"
@@ -161,15 +174,26 @@
               onclick={() => selectSearchResult(result)}
               onmouseenter={() => (selectedIndex = i)}
             >
-              <span class="item-role" class:user={result.role === "user"}>
-                {result.role === "user" ? "U" : "A"}
-              </span>
+              <span
+                class="item-dot"
+                style:background={agentColor(result.agent)}
+              ></span>
               <span class="item-text">
                 {@html sanitizeSnippet(result.snippet)}
               </span>
               <span class="item-meta">
-                {truncate(result.project, 20)}
+                {truncate(result.project, 20)} · {formatRelativeTime(result.session_ended_at)}
               </span>
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <span
+                class="item-id"
+                title="Copy session ID"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  copyToClipboard(result.session_id);
+                }}
+              >{result.session_id.slice(0, 8)}</span>
             </button>
           {/each}
         {/if}
@@ -296,25 +320,6 @@
     flex-shrink: 0;
   }
 
-  .item-role {
-    width: 18px;
-    height: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    font-size: 10px;
-    font-weight: 700;
-    flex-shrink: 0;
-    background: var(--assistant-bg);
-    color: var(--accent-purple);
-  }
-
-  .item-role.user {
-    background: var(--user-bg);
-    color: var(--accent-blue);
-  }
-
   .item-text {
     flex: 1;
     min-width: 0;
@@ -335,5 +340,44 @@
     text-align: center;
     color: var(--text-muted);
     font-size: 13px;
+  }
+
+  .palette-sort {
+    display: flex;
+    gap: 4px;
+    padding: 6px 14px 2px;
+  }
+
+  .sort-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-sans);
+  }
+
+  .sort-btn.active {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+    border-color: var(--accent-purple);
+  }
+
+  .item-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+    padding: 1px 3px;
+    border-radius: var(--radius-sm);
+  }
+
+  .item-id:hover {
+    background: var(--bg-inset);
+    color: var(--text-primary);
   }
 </style>
