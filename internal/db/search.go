@@ -76,12 +76,14 @@ func (db *DB) Search(
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent,
 			COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-			m.ordinal,
+			best.best_ordinal,
 			snippet(messages_fts, 0, '<mark>', '</mark>',
 				'...', %d) AS snippet,
 			best.best_rank AS rank
 		FROM (
-			SELECT m2.session_id, MIN(messages_fts.rowid) AS best_rowid,
+			SELECT m2.session_id,
+				messages_fts.rowid AS best_rowid,
+				m2.ordinal AS best_ordinal,
 				MIN(rank) AS best_rank
 			FROM messages_fts
 			JOIN messages m2 ON messages_fts.rowid = m2.id
