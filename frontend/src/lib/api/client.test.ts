@@ -591,6 +591,16 @@ describe("query serialization", () => {
       expect(lastUrl()).toBe("/api/v1/search?q=hello");
     });
 
+    it("includes sort param when provided", async () => {
+      await search("hello", { sort: "recency" });
+      expect(lastUrl()).toBe("/api/v1/search?q=hello&sort=recency");
+    });
+
+    it("omits sort param when not provided", async () => {
+      await search("hello");
+      expect(lastUrl()).toBe("/api/v1/search?q=hello");
+    });
+
     it("rejects empty query string", () => {
       expect(() => search("")).toThrow(
         "search query must not be empty",

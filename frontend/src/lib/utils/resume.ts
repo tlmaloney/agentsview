@@ -38,7 +38,7 @@ function shellQuote(s: string): string {
  * when the prefix matches a known agent. Raw IDs that happen to
  * contain ":" are left untouched.
  */
-function stripIdPrefix(id: string, agent?: string): string {
+export function stripIdPrefix(id: string, agent?: string): string {
   if (agent) {
     const prefix = agent + ":";
     if (id.startsWith(prefix)) return id.slice(prefix.length);

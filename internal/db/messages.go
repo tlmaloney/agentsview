@@ -557,6 +557,19 @@ func (db *DB) ToolCallCount(sessionID string) (int, error) {
 	return n, err
 }
 
+// SystemMessageCount returns the number of messages with is_system=1
+// for the given session. Used by the PG push fast-path to detect when
+// the is_system column was added to an existing installation and
+// previously synced rows need a rewrite.
+func (db *DB) SystemMessageCount(sessionID string) (int, error) {
+	var n int
+	err := db.getReader().QueryRow(
+		"SELECT COUNT(*) FROM messages WHERE session_id = ? AND is_system = 1",
+		sessionID,
+	).Scan(&n)
+	return n, err
+}
+
 // ToolCallContentFingerprint returns the sum of result_content_length
 // values for a session's tool calls, used as a lightweight content
 // change detector.

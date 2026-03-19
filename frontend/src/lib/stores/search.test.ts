@@ -296,4 +296,25 @@ describe("SearchStore", () => {
     searchStore.setSort("recency");
     expect(api.search).not.toHaveBeenCalled();
   });
+
+  it("setSort cancels pending debounced search before running", async () => {
+    vi.mocked(api.search).mockResolvedValue(makeSearchResponse("hello", 1));
+
+    // Start a search but don't let the debounce fire yet
+    searchStore.search("hello");
+    // Immediately switch sort — should cancel the queued debounce
+    searchStore.setSort("recency");
+    // Advance timers past debounce window
+    vi.advanceTimersByTime(DEBOUNCE_MS + 100);
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    // Only the immediate setSort call should have fired, not the queued debounce
+    expect(api.search).toHaveBeenCalledTimes(1);
+    expect(api.search).toHaveBeenCalledWith(
+      "hello",
+      expect.objectContaining({ sort: "recency" }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
 });

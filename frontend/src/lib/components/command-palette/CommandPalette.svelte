@@ -11,6 +11,7 @@
   } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { stripIdPrefix } from "../../utils/resume.js";
   import type { Session, SearchResult } from "../../api/types.js";
 
   let inputRef: HTMLInputElement | undefined = $state(undefined);
@@ -191,9 +192,9 @@
                 title="Copy session ID"
                 onclick={(e) => {
                   e.stopPropagation();
-                  copyToClipboard(result.session_id);
+                  copyToClipboard(stripIdPrefix(result.session_id, result.agent));
                 }}
-              >{result.session_id.slice(0, 8)}</span>
+              >{stripIdPrefix(result.session_id, result.agent).slice(0, 8)}</span>
             </button>
           {/each}
         {/if}
