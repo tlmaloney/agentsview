@@ -14,6 +14,17 @@ type searchResponse struct {
 	Next    int               `json:"next"`
 }
 
+// validateSort returns "recency" only for the exact string "recency";
+// all other values (including empty) return "relevance".
+// This is the same whitelist guard used inside db.Search() before
+// ORDER BY interpolation.
+func validateSort(s string) string {
+	if s == "recency" {
+		return "recency"
+	}
+	return "relevance"
+}
+
 // prepareFTSQuery wraps multi-word queries in quotes so
 // SQLite FTS matches the exact phrase rather than individual
 // terms.
@@ -47,6 +58,8 @@ func (s *Server) handleSearch(
 		return
 	}
 
+	sort := validateSort(q.Get("sort"))
+
 	if !s.db.HasFTS() {
 		writeError(w, http.StatusNotImplemented, "search not available")
 		return
@@ -55,6 +68,7 @@ func (s *Server) handleSearch(
 	filter := db.SearchFilter{
 		Query:   prepareFTSQuery(query),
 		Project: q.Get("project"),
+		Sort:    sort,
 		Cursor:  cursor,
 		Limit:   limit,
 	}
