@@ -204,9 +204,11 @@ func (s *Store) Search(
 	}
 
 	// Validate Sort before interpolating into ORDER BY.
-	outerOrderBy := "match_pos ASC"
+	// session_id ASC is a deterministic tie-breaker for both modes,
+	// preventing pagination instability when sort keys are equal.
+	outerOrderBy := "match_pos ASC, session_ended_at DESC, session_id ASC"
 	if f.Sort == "recency" {
-		outerOrderBy = "session_ended_at DESC"
+		outerOrderBy = "session_ended_at DESC, session_id ASC"
 	}
 
 	// $1 = escaped ILIKE pattern (for WHERE clause)

@@ -548,19 +548,22 @@ func (s *Sync) pushMessages(
 
 	var pgCount int
 	var pgContentSum, pgContentMax, pgContentMin int64
+	var pgSystemCount int
 	var pgToolCallCount int
 	var pgTCContentSum int64
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*),
 			COALESCE(SUM(content_length), 0),
 			COALESCE(MAX(content_length), 0),
-			COALESCE(MIN(content_length), 0)
+			COALESCE(MIN(content_length), 0),
+			COALESCE(SUM(CASE WHEN is_system THEN 1 ELSE 0 END), 0)
 		 FROM messages
 		 WHERE session_id = $1`,
 		sessionID,
 	).Scan(
 		&pgCount, &pgContentSum,
 		&pgContentMax, &pgContentMin,
+		&pgSystemCount,
 	); err != nil {
 		return 0, fmt.Errorf(
 			"counting pg messages: %w", err,
@@ -586,6 +589,12 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
+		localSystemCount, err := s.local.SystemMessageCount(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"counting local system messages: %w", err,
+			)
+		}
 		localTCCount, err := s.local.ToolCallCount(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
@@ -602,6 +611,7 @@ func (s *Sync) pushMessages(
 		if localSum == pgContentSum &&
 			localMax == pgContentMax &&
 			localMin == pgContentMin &&
+			localSystemCount == pgSystemCount &&
 			localTCCount == pgToolCallCount &&
 			localTCSum == pgTCContentSum {
 			return 0, nil

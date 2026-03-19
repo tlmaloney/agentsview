@@ -38,6 +38,7 @@ class SearchStore {
   setSort(s: "relevance" | "recency") {
     this.sort = s;
     if (this.query.trim()) {
+      this.debouncedSearch.cancel();
       this.executeSearch(this.query, this.project);
     }
   }
