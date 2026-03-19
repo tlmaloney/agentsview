@@ -5,13 +5,17 @@
 > checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve the Command Palette (Cmd+K) search to show one session-grouped result per
-session with agent dot, relative time, and a short ID, plus a Relevance/Recency sort toggle.
+session with agent dot, session name, relative time, and a short ID, plus a Relevance/Recency
+sort toggle. Search also matches session names (display_name / first_message) in addition to
+message content.
 
-**Architecture:** The SQLite path changes `db.Search()` to `GROUP BY session_id` with
-`min(rank)` and joins sessions for `agent`/`session_ended_at`. The PostgreSQL path uses a CTE
-with `DISTINCT ON (session_id)` for equivalent grouping. The HTTP handler reads and validates a
-`sort` query param. The frontend removes per-message fields, adds a `sort` state with
-`setSort()`, and rewrites the result row and sort toggle.
+**Architecture:** The SQLite path uses a two-phase subquery in `db.Search()` to group by
+session and call `snippet()` on the best-ranked message, UNION'd with a LIKE search on
+`sessions.display_name`/`first_message`. The PostgreSQL path uses a CTE with `DISTINCT ON
+(session_id)` UNION'd with an ILIKE session name branch. `SearchResult` gains a `Name` field
+from `COALESCE(display_name, first_message, '')`. The HTTP handler reads and validates a `sort`
+query param. The frontend adds `name` to the result type, displays it in a two-line result row,
+and handles `ordinal = -1` (name-only match) by skipping scroll.
 
 **Tech Stack:** Go, SQLite FTS5, PostgreSQL (ILIKE + DISTINCT ON), Svelte 5, TypeScript, Vitest
 
@@ -21,18 +25,18 @@ with `DISTINCT ON (session_id)` for equivalent grouping. The HTTP handler reads 
 
 | File | Change |
 | --- | --- |
-| `internal/db/search.go` | Update `SearchResult`, `SearchFilter`; add sort validation; group SQL |
-| `internal/db/search_test.go` | Add `TestSearch` covering dedup, agent, sort, pagination, injection guard |
+| `internal/db/search.go` | Update `SearchResult` (add `Name`), `SearchFilter`; sort validation; two-phase FTS subquery UNION'd with session name LIKE |
+| `internal/db/search_test.go` | Add `TestSearch` covering dedup, agent, sort, pagination, injection guard, session name match, cross-branch dedup |
 | `internal/server/search.go` | Read and validate `sort` param; pass to filter |
 | `internal/postgres/schema.go` | Bump `SchemaVersion` to 2; add `is_system` to DDL and `alters` |
 | `internal/postgres/push.go` | Add `is_system` to message INSERT |
-| `internal/postgres/messages.go` | Rewrite `Search()` with CTE + `DISTINCT ON`; update scan |
-| `internal/postgres/messages_pgtest_test.go` | Expand to cover dedup, agent, sort, system-msg exclusion |
-| `frontend/src/lib/api/types/core.ts` | Remove `role`/`timestamp`; add `agent`/`session_ended_at` |
+| `internal/postgres/messages.go` | Rewrite `Search()` with UNION CTE (`DISTINCT ON` msg branch + session name ILIKE branch); add `Name` to scan |
+| `internal/postgres/messages_pgtest_test.go` | Cover dedup, agent, sort, system-msg exclusion, session name match |
+| `frontend/src/lib/api/types/core.ts` | Remove `role`/`timestamp`; add `agent`/`session_ended_at`/`name` |
 | `frontend/src/lib/api/client.ts` | Add `sort` param to `search()` |
 | `frontend/src/lib/stores/search.svelte.ts` | Add `sort` state and `setSort()` |
 | `frontend/src/lib/stores/search.test.ts` | Update factory; add sort state and setSort tests |
-| `frontend/src/lib/components/command-palette/CommandPalette.svelte` | New result row + sort toggle |
+| `frontend/src/lib/components/command-palette/CommandPalette.svelte` | Two-line result row (name + snippet), sort toggle, name-only navigation |
 
 ---
 
@@ -1467,14 +1471,583 @@ git commit -m "feat: update CommandPalette with session-grouped result layout an
 
 ---
 
+### Task 9: Session name search — backend (SQLite + PostgreSQL + tests)
+
+**Files:**
+
+- Modify: `internal/db/search.go`
+- Modify: `internal/db/search_test.go`
+- Modify: `internal/postgres/messages.go`
+- Modify: `internal/postgres/messages_pgtest_test.go`
+
+#### SQLite (`internal/db/search.go`)
+
+- [ ] **Step 1: Add `Name` field to `SearchResult`**
+
+```go
+type SearchResult struct {
+    SessionID      string  `json:"session_id"`
+    Project        string  `json:"project"`
+    Agent          string  `json:"agent"`
+    Name           string  `json:"name"`
+    Ordinal        int     `json:"ordinal"`
+    SessionEndedAt string  `json:"session_ended_at"`
+    Snippet        string  `json:"snippet"`
+    Rank           float64 `json:"rank"`
+}
+```
+
+- [ ] **Step 2: Rewrite `Search()` with UNION**
+
+Replace the query in `db.Search()`. The new query has two branches joined with
+`UNION` (which deduplicates by all columns — since both branches are disjoint
+by construction, `UNION ALL` with a NOT IN guard is used instead to avoid full
+de-dup cost):
+
+```go
+// Build the inner subquery for the FTS branch (finds best rowid per session).
+innerWhere := []string{
+    "messages_fts MATCH ?",
+    "s2.deleted_at IS NULL",
+    "m2.is_system = 0",
+}
+innerArgs := []any{f.Query}
+if f.Project != "" {
+    innerWhere = append(innerWhere, "s2.project = ?")
+    innerArgs = append(innerArgs, f.Project)
+}
+
+// Session name LIKE pattern (same project filter).
+likePattern := "%" + escapeLike(f.Query) + "%"
+nameArgs := []any{likePattern, likePattern} // display_name, first_message
+if f.Project != "" {
+    nameArgs = append(nameArgs, f.Project)
+}
+
+query := fmt.Sprintf(`
+    SELECT m.session_id, s.project, s.agent,
+        COALESCE(s.display_name, s.first_message, '') AS name,
+        COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
+        best.best_ordinal AS ordinal,
+        snippet(messages_fts, 0, '<mark>', '</mark>', '...', %d) AS snippet,
+        best.best_rank AS rank
+    FROM (
+        SELECT m2.session_id,
+            messages_fts.rowid AS best_rowid,
+            m2.ordinal AS best_ordinal,
+            MIN(rank) AS best_rank
+        FROM messages_fts
+        JOIN messages m2 ON messages_fts.rowid = m2.id
+        JOIN sessions s2 ON m2.session_id = s2.id
+        WHERE %s
+        GROUP BY m2.session_id
+    ) AS best
+    JOIN messages_fts ON messages_fts.rowid = best.best_rowid
+    JOIN messages m ON m.id = best.best_rowid
+    JOIN sessions s ON m.session_id = s.id
+    WHERE messages_fts MATCH ?
+    UNION ALL
+    SELECT s.id, s.project, s.agent,
+        COALESCE(s.display_name, s.first_message, '') AS name,
+        COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
+        -1 AS ordinal,
+        COALESCE(s.display_name, s.first_message, '') AS snippet,
+        0.0 AS rank
+    FROM sessions s
+    WHERE (s.display_name LIKE ? ESCAPE '\'
+        OR s.first_message LIKE ? ESCAPE '\')
+        AND s.deleted_at IS NULL
+        %s
+        AND s.id NOT IN (
+            SELECT m2.session_id
+            FROM messages_fts
+            JOIN messages m2 ON messages_fts.rowid = m2.id
+            JOIN sessions s2 ON m2.session_id = s2.id
+            WHERE %s
+            GROUP BY m2.session_id
+        )
+    ORDER BY %s
+    LIMIT ? OFFSET ?`,
+    snippetTokenLength,
+    strings.Join(innerWhere, " AND "),   // inner FTS WHERE
+    strings.Join(innerWhere, " AND "),   // outer FTS MATCH re-filter
+    nameProjectClause,                    // optional project filter for name branch
+    strings.Join(innerWhere, " AND "),   // NOT IN subquery WHERE
+    orderBy,
+)
+```
+
+The `args` slice must supply parameters in the order they appear:
+1. Inner FTS subquery args (`f.Query`, optional `f.Project`)
+2. Outer FTS MATCH arg (`f.Query`)
+3. Name LIKE args (`likePattern` × 2, optional `f.Project`)
+4. NOT IN subquery args (`f.Query`, optional `f.Project`)
+5. `LIMIT ? OFFSET ?`
+
+Build a helper `buildSearchArgs` to assemble these in the right order and avoid
+duplication.
+
+The `Scan` call must include `name`:
+
+```go
+if err := rows.Scan(
+    &r.SessionID, &r.Project, &r.Agent, &r.Name,
+    &r.SessionEndedAt, &r.Ordinal,
+    &r.Snippet, &r.Rank,
+); err != nil { ... }
+```
+
+- [ ] **Step 3: Write failing tests in `search_test.go`**
+
+Add the following subtests to `TestSearch` (alongside the existing ones):
+
+```go
+t.Run("session name match via display_name", func(t *testing.T) {
+    t.Parallel()
+    // s4: display_name contains "uniquename", no messages match
+    insertSession(t, d, "s4", "proj-d", func(s *Session) {
+        s.Agent = "claude"
+        dn := "my uniquename session"
+        s.DisplayName = &dn
+        s.StartedAt = Ptr("2024-01-04T10:00:00Z")
+    })
+    // message that does NOT contain "uniquename"
+    insertMessages(t, d, userMsg("s4", 0, "hello world"))
+
+    page, err := d.Search(context.Background(), SearchFilter{
+        Query: "uniquename", Limit: 10,
+    })
+    if err != nil {
+        t.Fatalf("Search: %v", err)
+    }
+    if len(page.Results) != 1 {
+        t.Fatalf("got %d results, want 1", len(page.Results))
+    }
+    if page.Results[0].SessionID != "s4" {
+        t.Errorf("got session %q, want s4", page.Results[0].SessionID)
+    }
+    if page.Results[0].Ordinal != -1 {
+        t.Errorf("ordinal = %d, want -1 (name-only match)", page.Results[0].Ordinal)
+    }
+})
+
+t.Run("name field populated on message-content match", func(t *testing.T) {
+    t.Parallel()
+    page, err := d.Search(context.Background(), SearchFilter{
+        Query: "alpha", Limit: 10,
+    })
+    if err != nil {
+        t.Fatalf("Search: %v", err)
+    }
+    if len(page.Results) == 0 {
+        t.Fatal("expected results")
+    }
+    // s1 has no display_name — name should fall back to first_message
+    for _, r := range page.Results {
+        if r.Name == "" {
+            t.Errorf("result %q has empty Name", r.SessionID)
+        }
+    }
+})
+
+t.Run("no duplicate when session matches both name and content", func(t *testing.T) {
+    t.Parallel()
+    // s5: display_name AND message content both contain "doublehit"
+    insertSession(t, d, "s5", "proj-e", func(s *Session) {
+        s.Agent = "claude"
+        dn := "doublehit session"
+        s.DisplayName = &dn
+        s.StartedAt = Ptr("2024-01-05T10:00:00Z")
+    })
+    insertMessages(t, d, userMsg("s5", 0, "doublehit in message too"))
+
+    page, err := d.Search(context.Background(), SearchFilter{
+        Query: "doublehit", Limit: 10,
+    })
+    if err != nil {
+        t.Fatalf("Search: %v", err)
+    }
+    seen := map[string]int{}
+    for _, r := range page.Results {
+        seen[r.SessionID]++
+    }
+    if seen["s5"] != 1 {
+        t.Errorf("s5 appears %d times, want 1", seen["s5"])
+    }
+    // When matched by both, should have a real ordinal (message match wins)
+    for _, r := range page.Results {
+        if r.SessionID == "s5" && r.Ordinal == -1 {
+            t.Error("expected real ordinal (message match), got -1")
+        }
+    }
+})
+```
+
+- [ ] **Step 4: Run tests to confirm they fail**
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/db/... -run TestSearch -v 2>&1 | head -40
+```
+
+Expected: compile error (`Name` not on `SearchResult` yet) or test failures on
+new subtests.
+
+- [ ] **Step 5: Run tests to confirm they pass after implementation**
+
+```bash
+CGO_ENABLED=1 go test -tags fts5 ./internal/db/... -run TestSearch -v
+```
+
+Expected: all subtests PASS.
+
+- [ ] **Step 6: Run vet and full db tests**
+
+```bash
+go fmt ./internal/db/...
+go vet -tags fts5 ./internal/db/...
+CGO_ENABLED=1 go test -tags fts5 ./internal/db/... 2>&1 | tail -10
+```
+
+#### PostgreSQL (`internal/postgres/messages.go`)
+
+- [ ] **Step 7: Add `Name` to the PG `Search()` query and scan**
+
+In `internal/postgres/messages.go`, update the `msg_matches` CTE to add
+`COALESCE(s.display_name, s.first_message, '') AS name`, add a `name_matches`
+CTE that does ILIKE on `display_name`/`first_message` with `NOT IN
+(SELECT session_id FROM msg_matches)`, and combine with `UNION ALL`. Update
+the scan to include `&r.Name`.
+
+Detailed query structure (mirrors the spec):
+
+```sql
+WITH msg_matches AS (
+    SELECT DISTINCT ON (m.session_id)
+        m.session_id, s.project, s.agent,
+        COALESCE(s.display_name, s.first_message, '') AS name,
+        COALESCE(s.ended_at, s.started_at) AS session_ended_at,
+        m.ordinal,
+        POSITION(LOWER($2) IN LOWER(m.content)) AS match_pos,
+        <snippet CASE expr> AS snippet
+    FROM messages m
+    JOIN sessions s ON m.session_id = s.id
+    WHERE m.content ILIKE '%' || $1 || '%' ESCAPE E'\\'
+      AND s.deleted_at IS NULL
+      AND m.is_system = FALSE
+      <project clause>
+    ORDER BY m.session_id,
+        POSITION(LOWER($2) IN LOWER(m.content)) ASC,
+        m.ordinal ASC
+),
+name_matches AS (
+    SELECT
+        s.id, s.project, s.agent,
+        COALESCE(s.display_name, s.first_message, '') AS name,
+        COALESCE(s.ended_at, s.started_at) AS session_ended_at,
+        -1 AS ordinal,
+        0 AS match_pos,
+        COALESCE(s.display_name, s.first_message, '') AS snippet
+    FROM sessions s
+    WHERE (s.display_name ILIKE '%' || $1 || '%' ESCAPE E'\\'
+        OR s.first_message ILIKE '%' || $1 || '%' ESCAPE E'\\')
+      AND s.deleted_at IS NULL
+      AND s.id NOT IN (SELECT session_id FROM msg_matches)
+      <project clause>
+),
+combined AS (
+    SELECT *, 1 AS match_priority FROM msg_matches
+    UNION ALL
+    SELECT *, 2 AS match_priority FROM name_matches
+)
+SELECT session_id, project, agent, name,
+       session_ended_at, ordinal, snippet, 1.0 AS rank
+FROM combined
+ORDER BY <match_pos ASC, session_ended_at DESC | session_ended_at DESC>
+LIMIT $N OFFSET $N+1
+```
+
+Note: `match_pos` is 0 for name-only rows, placing them after message matches
+when sorting by relevance (`match_pos ASC`).
+
+- [ ] **Step 8: Write PG tests for session name match**
+
+Add to `internal/postgres/messages_pgtest_test.go`:
+
+```go
+func TestPGSearchSessionNameMatch(t *testing.T) {
+    pgURL := testPGURL(t)
+    ensureStoreSchema(t, pgURL)
+
+    pg, err := Open(pgURL, testSchema, false)
+    if err != nil {
+        t.Fatalf("Open: %v", err)
+    }
+    defer pg.Close()
+
+    // Insert session with display_name containing unique search term,
+    // no messages match.
+    _, err = pg.Exec(`
+        INSERT INTO sessions
+            (id, machine, project, agent, first_message, display_name,
+             started_at, message_count, user_message_count)
+        VALUES
+            ('name-match-001', 'test-machine', 'test-project', 'claude',
+             'first msg text', 'uniquedisplayterm session',
+             '2026-03-15T10:00:00Z'::timestamptz, 1, 1)
+        ON CONFLICT (id) DO NOTHING`)
+    if err != nil {
+        t.Fatalf("insert session: %v", err)
+    }
+    _, err = pg.Exec(`
+        INSERT INTO messages
+            (session_id, ordinal, role, content, timestamp, content_length)
+        VALUES
+            ('name-match-001', 0, 'user', 'no match here',
+             '2026-03-15T10:00:00Z'::timestamptz, 13)
+        ON CONFLICT DO NOTHING`)
+    if err != nil {
+        t.Fatalf("insert message: %v", err)
+    }
+
+    store, err := NewStore(pgURL, testSchema, true)
+    if err != nil {
+        t.Fatalf("NewStore: %v", err)
+    }
+    defer store.Close()
+
+    page, err := store.Search(context.Background(), db.SearchFilter{
+        Query: "uniquedisplayterm", Limit: 10,
+    })
+    if err != nil {
+        t.Fatalf("Search: %v", err)
+    }
+    if len(page.Results) != 1 {
+        t.Fatalf("got %d results, want 1", len(page.Results))
+    }
+    r := page.Results[0]
+    if r.SessionID != "name-match-001" {
+        t.Errorf("got session %q, want name-match-001", r.SessionID)
+    }
+    if r.Ordinal != -1 {
+        t.Errorf("ordinal = %d, want -1 (name-only match)", r.Ordinal)
+    }
+    if r.Name == "" {
+        t.Error("Name field is empty")
+    }
+}
+```
+
+- [ ] **Step 9: Run PG tests**
+
+```bash
+make test-postgres
+```
+
+Expected: all tests PASS, including new `TestPGSearchSessionNameMatch`.
+
+- [ ] **Step 10: Format, vet, run full test suite**
+
+```bash
+go fmt ./internal/db/... ./internal/postgres/...
+go vet -tags fts5 ./internal/db/... ./internal/postgres/...
+CGO_ENABLED=1 go test -tags fts5 ./... 2>&1 | tail -15
+```
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add internal/db/search.go internal/db/search_test.go \
+        internal/postgres/messages.go \
+        internal/postgres/messages_pgtest_test.go
+git commit -m "feat: include session name in search scope and results"
+```
+
+---
+
+### Task 10: Session name in frontend — types, display, navigation
+
+**Files:**
+
+- Modify: `frontend/src/lib/api/types/core.ts`
+- Modify: `frontend/src/lib/stores/search.test.ts`
+- Modify: `frontend/src/lib/components/command-palette/CommandPalette.svelte`
+
+- [ ] **Step 1: Add `name` to `SearchResult` type**
+
+In `frontend/src/lib/api/types/core.ts`, add `name: string` to the
+`SearchResult` interface:
+
+```typescript
+export interface SearchResult {
+  session_id: string;
+  project: string;
+  agent: string;
+  name: string;
+  ordinal: number;
+  session_ended_at: string;
+  snippet: string;
+  rank: number;
+}
+```
+
+- [ ] **Step 2: Update `makeSearchResponse` in `search.test.ts`**
+
+Add `name: "session name"` to the mock result objects inside
+`makeSearchResponse`:
+
+```typescript
+results: Array.from({ length: count }, (_, i) => ({
+  session_id: `s${i}`,
+  project: "proj",
+  agent: "claude",
+  name: "session name",
+  ordinal: i,
+  session_ended_at: new Date().toISOString(),
+  snippet: `result ${i}`,
+  rank: i,
+})),
+```
+
+Run the test suite to confirm no regressions:
+
+```bash
+cd frontend && npx vitest run src/lib/stores/search.test.ts
+```
+
+- [ ] **Step 3: Update `CommandPalette.svelte` result row**
+
+Change the result row from a single-line to a two-line layout. Replace the
+`{#each searchStore.results as result, i}` block with:
+
+```svelte
+{#each searchStore.results as result, i}
+  <button
+    class="palette-item"
+    class:selected={i === selectedIndex}
+    onclick={() => selectSearchResult(result)}
+    onmouseenter={() => (selectedIndex = i)}
+  >
+    <span
+      class="item-dot"
+      style:background={agentColor(result.agent)}
+    ></span>
+    <span class="item-body">
+      {#if result.name}
+        <span class="item-name">{truncate(result.name, 60)}</span>
+      {/if}
+      {#if result.snippet && result.snippet !== result.name}
+        <span class="item-snippet">
+          {@html sanitizeSnippet(result.snippet)}
+        </span>
+      {/if}
+    </span>
+    <span class="item-meta">
+      {truncate(result.project, 20)} · {formatRelativeTime(result.session_ended_at)}
+    </span>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <span
+      class="item-id"
+      title="Copy session ID"
+      onclick={(e) => {
+        e.stopPropagation();
+        copyToClipboard(stripIdPrefix(result.session_id, result.agent));
+      }}
+    >{stripIdPrefix(result.session_id, result.agent).slice(0, 8)}</span>
+  </button>
+{/each}
+```
+
+- [ ] **Step 4: Handle name-only navigation (`ordinal === -1`)**
+
+In `selectSearchResult`, skip `scrollToOrdinal` when `ordinal` is `-1`:
+
+```typescript
+function selectSearchResult(r: SearchResult) {
+  sessions.selectSession(r.session_id);
+  if (r.ordinal !== -1) {
+    ui.scrollToOrdinal(r.ordinal, r.session_id);
+  }
+  close();
+}
+```
+
+- [ ] **Step 5: Add CSS for the two-line layout**
+
+In the `<style>` block, replace `.item-text` with:
+
+```css
+.item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.item-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.item-snippet {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+```
+
+- [ ] **Step 6: Verify TypeScript and build**
+
+```bash
+cd frontend
+npm run check 2>&1 | tail -10
+npm run build 2>&1 | tail -10
+npx vitest run 2>&1 | tail -20
+```
+
+Expected: no type errors, build succeeds, all tests pass.
+
+- [ ] **Step 7: Run Go tests**
+
+```bash
+cd ..
+CGO_ENABLED=1 go test -tags fts5 ./... -short 2>&1 | tail -15
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add frontend/src/lib/api/types/core.ts \
+        frontend/src/lib/stores/search.test.ts \
+        frontend/src/lib/components/command-palette/CommandPalette.svelte
+git commit -m "feat: show session name in search results, handle name-only match navigation"
+```
+
+---
+
 ## Manual Verification Checklist
 
 After all tasks complete, verify end-to-end with a running server:
 
-1. Open the app, press Cmd+K, type a 3+ character query.
-2. Confirm each result shows: agent color dot, snippet, `project · Xh ago`, 8-char ID.
+1. Open the app, press Cmd+K, type a 3+ character query that matches message
+   content.
+2. Confirm each result shows: agent color dot, session name (first line),
+   snippet (second line, muted), `project · Xh ago`, 8-char ID.
 3. Click a short ID — clipboard should be populated (no visible feedback).
-4. Click a result — navigates to the session and scrolls to the matching message ordinal.
-5. Click **Recency** toggle — results reorder; **Recency** button appears highlighted.
+4. Click a result — navigates to the session and scrolls to the matching
+   message ordinal.
+5. Click **Recency** toggle — results reorder; **Recency** button appears
+   highlighted.
 6. Click **Relevance** toggle — results reorder back.
-7. Test `pg serve` path: connect to a remote PG server and repeat steps 1–6.
+7. Search for a term that only appears in a session's display name or first
+   message (not in any message content). Confirm the session appears in
+   results with only the name shown (no snippet below it).
+8. Click a name-only match — navigates to the session, no scroll (no specific
+   message to jump to).
+9. Test `pg serve` path: connect to a remote PG server and repeat steps 1–8.
