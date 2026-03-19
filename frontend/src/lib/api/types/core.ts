@@ -81,9 +81,9 @@ export type MinimapEntry = Pick<
 export interface SearchResult {
   session_id: string;
   project: string;
+  agent: string;
   ordinal: number;
-  role: string;
-  timestamp: string;
+  session_ended_at: string;
   snippet: string;
   rank: number;
 }

@@ -212,6 +212,7 @@ export function search(
     project?: string;
     limit?: number;
     cursor?: number;
+    sort?: "relevance" | "recency";
   } = {},
   init?: RequestInit,
 ): Promise<SearchResponse> {
