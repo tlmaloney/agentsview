@@ -249,7 +249,8 @@ func (s *Store) Search(
 				AND m.is_system = FALSE
 				%s
 			ORDER BY m.session_id,
-				POSITION(LOWER($2) IN LOWER(m.content)) ASC
+				POSITION(LOWER($2) IN LOWER(m.content)) ASC,
+				m.ordinal ASC
 		)
 		SELECT session_id, project, agent,
 			session_ended_at, ordinal,
