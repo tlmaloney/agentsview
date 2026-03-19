@@ -189,7 +189,8 @@ func stripFTSQuotes(v string) string {
 	return v
 }
 
-// Search performs ILIKE-based search across messages.
+// Search performs ILIKE-based full-text search across messages,
+// grouped to one result per session via DISTINCT ON.
 func (s *Store) Search(
 	ctx context.Context, f db.SearchFilter,
 ) (db.SearchPage, error) {
@@ -202,49 +203,62 @@ func (s *Store) Search(
 		return db.SearchPage{}, nil
 	}
 
-	whereClauses := []string{
-		`m.content ILIKE '%' || $1 || '%' ESCAPE E'\\'`,
-		"s.deleted_at IS NULL",
+	// Validate Sort before interpolating into ORDER BY.
+	outerOrderBy := "match_pos ASC"
+	if f.Sort == "recency" {
+		outerOrderBy = "session_ended_at DESC"
 	}
+
+	// $1 = escaped ILIKE pattern (for WHERE clause)
+	// $2 = raw search term (for POSITION — case folded in expression)
 	args := []any{escapeLike(searchTerm), searchTerm}
 	argIdx := 3
 
+	projectClause := ""
 	if f.Project != "" {
-		whereClauses = append(
-			whereClauses,
-			fmt.Sprintf("s.project = $%d", argIdx),
+		projectClause = fmt.Sprintf(
+			"AND s.project = $%d", argIdx,
 		)
 		args = append(args, f.Project)
 		argIdx++
 	}
 
 	query := fmt.Sprintf(`
-		SELECT m.session_id, s.project, s.agent,
-			COALESCE(
-				TO_CHAR(
-					COALESCE(s.ended_at, s.started_at)
-						AT TIME ZONE 'UTC',
-					'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-				''
-			) AS session_ended_at,
-			m.ordinal,
-			CASE WHEN POSITION(
-				LOWER($2) IN LOWER(m.content)) > 100
-				THEN '...' || SUBSTRING(m.content
-					FROM GREATEST(1, POSITION(
-						LOWER($2) IN LOWER(m.content)
-					) - 50) FOR 200) || '...'
-				ELSE SUBSTRING(m.content FROM 1 FOR 200)
-					|| CASE WHEN LENGTH(m.content) > 200
-						THEN '...' ELSE '' END
-			END AS snippet,
-			1.0 AS rank
-		FROM messages m
-		JOIN sessions s ON m.session_id = s.id
-		WHERE %s
-		ORDER BY m.timestamp DESC NULLS LAST, m.session_id, m.ordinal
+		WITH best_per_session AS (
+			SELECT DISTINCT ON (m.session_id)
+				m.session_id,
+				s.project,
+				s.agent,
+				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
+				m.ordinal,
+				POSITION(LOWER($2) IN LOWER(m.content)) AS match_pos,
+				CASE
+					WHEN POSITION(LOWER($2) IN LOWER(m.content)) > 100
+						THEN '...' || SUBSTRING(m.content
+							FROM GREATEST(1, POSITION(
+								LOWER($2) IN LOWER(m.content)
+							) - 50) FOR 200) || '...'
+					ELSE SUBSTRING(m.content FROM 1 FOR 200)
+						|| CASE WHEN LENGTH(m.content) > 200
+							THEN '...' ELSE '' END
+				END AS snippet
+			FROM messages m
+			JOIN sessions s ON m.session_id = s.id
+			WHERE m.content ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+				AND s.deleted_at IS NULL
+				AND m.is_system = FALSE
+				%s
+			ORDER BY m.session_id,
+				POSITION(LOWER($2) IN LOWER(m.content)) ASC
+		)
+		SELECT session_id, project, agent,
+			session_ended_at, ordinal,
+			snippet, 1.0 AS rank
+		FROM best_per_session
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d`,
-		strings.Join(whereClauses, " AND "),
+		projectClause,
+		outerOrderBy,
 		argIdx, argIdx+1,
 	)
 	args = append(args, f.Limit+1, f.Cursor)
@@ -259,15 +273,19 @@ func (s *Store) Search(
 	results := []db.SearchResult{}
 	for rows.Next() {
 		var r db.SearchResult
+		var endedAt *time.Time
 		if err := rows.Scan(
 			&r.SessionID, &r.Project, &r.Agent,
-			&r.SessionEndedAt, &r.Ordinal,
+			&endedAt, &r.Ordinal,
 			&r.Snippet, &r.Rank,
 		); err != nil {
 			return db.SearchPage{},
 				fmt.Errorf(
 					"scanning search result: %w", err,
 				)
+		}
+		if endedAt != nil {
+			r.SessionEndedAt = FormatISO8601(*endedAt)
 		}
 		results = append(results, r)
 	}
