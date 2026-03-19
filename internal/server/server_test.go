@@ -1085,12 +1085,18 @@ func TestSearch_Limits(t *testing.T) {
 	if !te.db.HasFTS() {
 		t.Skip("skipping search test: no FTS support")
 	}
-	// Seed enough messages to test limits
-	te.seedSession(t, "s1", "my-app", 600)
-	te.seedMessages(t, "s1", 600, func(i int, m *db.Message) {
-		m.Content = "common search term"
-		m.ContentLength = 18
-	})
+	// Seed 600 distinct sessions, each with one matching message.
+	// Under session-grouped search, each session produces exactly one result,
+	// so limit/pagination operates at the session level.
+	const totalSessions = 600
+	for i := range totalSessions {
+		id := fmt.Sprintf("limit-test-%04d", i)
+		te.seedSession(t, id, "my-app", 1)
+		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
+			m.Content = "common search term"
+			m.ContentLength = 18
+		})
+	}
 
 	tests := []struct {
 		name      string
