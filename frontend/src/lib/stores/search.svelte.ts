@@ -5,6 +5,7 @@ import type { SearchResult } from "../api/types.js";
 class SearchStore {
   query: string = $state("");
   project: string = $state("");
+  sort: "relevance" | "recency" = $state("relevance");
   results: SearchResult[] = $state([]);
   isSearching: boolean = $state(false);
 
@@ -34,6 +35,13 @@ class SearchStore {
     this.debouncedSearch(q, this.project);
   }
 
+  setSort(s: "relevance" | "recency") {
+    this.sort = s;
+    if (this.query.trim()) {
+      this.executeSearch(this.query, this.project);
+    }
+  }
+
   clear() {
     this.query = "";
     this.results = [];
@@ -53,7 +61,7 @@ class SearchStore {
     try {
       const res = await api.search(
         q,
-        { project: project || undefined, limit: 30 },
+        { project: project || undefined, limit: 30, sort: this.sort },
         { signal },
       );
       this.results = res.results ?? [];
