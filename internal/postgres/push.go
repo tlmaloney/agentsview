@@ -816,17 +816,17 @@ func bulkInsertMessages(
 		b.WriteString(`INSERT INTO messages (
 			session_id, ordinal, role, content,
 			timestamp, has_thinking, has_tool_use,
-			content_length) VALUES `)
-		args := make([]any, 0, len(batch)*8)
+			content_length, is_system) VALUES `)
+		args := make([]any, 0, len(batch)*9)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*8 + 1
+			p := j*9 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3,
-				p+4, p+5, p+6, p+7,
+				p+4, p+5, p+6, p+7, p+8,
 			)
 			var ts any
 			if m.Timestamp != "" {
@@ -840,7 +840,7 @@ func bulkInsertMessages(
 				sessionID, m.Ordinal, m.Role,
 				sanitizePG(m.Content), ts,
 				m.HasThinking,
-				m.HasToolUse, m.ContentLength,
+				m.HasToolUse, m.ContentLength, m.IsSystem,
 			)
 		}
 		if _, err := tx.ExecContext(
