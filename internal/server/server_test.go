@@ -1192,6 +1192,50 @@ func TestSearch_ZeroResults(t *testing.T) {
 	}
 }
 
+// TestSearch_Deduplication verifies that a session with many matching messages
+// produces exactly one search result. This guards against FTS5 segment
+// duplication bugs where multiple index segments could yield multiple rows
+// for the same session_id.
+func TestSearch_Deduplication(t *testing.T) {
+	te := setup(t)
+	if !te.db.HasFTS() {
+		t.Skip("skipping search test: no FTS support")
+	}
+
+	// Session s1: many messages all containing the search term.
+	te.seedSession(t, "s1", "proj-a", 1)
+	const n = 80
+	te.seedMessages(t, "s1", n, func(_ int, m *db.Message) {
+		m.Content = "needle in every message"
+		m.ContentLength = 23
+	})
+
+	// Session s2: one message containing the search term (control).
+	te.seedSession(t, "s2", "proj-b", 1)
+	te.seedMessages(t, "s2", 1, func(_ int, m *db.Message) {
+		m.Content = "needle single message"
+		m.ContentLength = 21
+	})
+
+	w := te.get(t, "/api/v1/search?q=needle&limit=100")
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[searchResponse](t, w)
+	if resp.Count != 2 {
+		t.Errorf("got count=%d, want 2 (one result per session)", resp.Count)
+	}
+	// Verify no duplicate session_ids in the response.
+	seen := make(map[string]int)
+	for _, r := range resp.Results {
+		seen[r.SessionID]++
+	}
+	for sid, count := range seen {
+		if count > 1 {
+			t.Errorf("session_id %q appears %d times in results, want 1", sid, count)
+		}
+	}
+}
+
 func TestSearch_NotAvailable(t *testing.T) {
 	te := setup(t)
 	// Simulate missing FTS by dropping the virtual table.
