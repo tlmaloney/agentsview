@@ -13,7 +13,7 @@ import (
 // way that requires migration logic. EnsureSchema writes it to
 // sync_metadata so future versions can detect what they're
 // working with.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // coreDDL creates the tables and indexes. It uses unqualified
 // names because Open() sets search_path to the target schema.
@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS messages (
     has_thinking   BOOLEAN NOT NULL DEFAULT FALSE,
     has_tool_use   BOOLEAN NOT NULL DEFAULT FALSE,
     content_length INT NOT NULL DEFAULT 0,
+    is_system      BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (session_id, ordinal),
     FOREIGN KEY (session_id)
         REFERENCES sessions(id) ON DELETE CASCADE
@@ -121,6 +122,11 @@ func EnsureSchema(
 			 ADD COLUMN IF NOT EXISTS call_index
 			 INT NOT NULL DEFAULT 0`,
 			"adding tool_calls.call_index",
+		},
+		{
+			`ALTER TABLE messages
+			 ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding messages.is_system",
 		},
 	}
 	for _, a := range alters {
