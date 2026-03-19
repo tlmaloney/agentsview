@@ -629,8 +629,8 @@ func (s *Sync) pushMessages(
 		INSERT INTO messages (
 			session_id, ordinal, role, content,
 			timestamp, has_thinking, has_tool_use,
-			content_length
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
+			content_length, is_system
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
 	if err != nil {
 		return 0, fmt.Errorf(
 			"preparing message insert: %w", err,
@@ -694,7 +694,7 @@ func (s *Sync) pushMessages(
 			_, err := msgStmt.ExecContext(ctx,
 				sessionID, m.Ordinal, m.Role,
 				m.Content, ts, m.HasThinking,
-				m.HasToolUse, m.ContentLength,
+				m.HasToolUse, m.ContentLength, m.IsSystem,
 			)
 			if err != nil {
 				return count, fmt.Errorf(
