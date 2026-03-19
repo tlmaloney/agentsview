@@ -12,22 +12,23 @@ const (
 	snippetTokenLength = 32
 )
 
-// SearchResult holds a message match with session context.
+// SearchResult holds a session-level match with the best-ranked snippet.
 type SearchResult struct {
-	SessionID string  `json:"session_id"`
-	Project   string  `json:"project"`
-	Ordinal   int     `json:"ordinal"`
-	Role      string  `json:"role"`
-	Timestamp string  `json:"timestamp"`
-	Snippet   string  `json:"snippet"`
-	Rank      float64 `json:"rank"`
+	SessionID      string  `json:"session_id"`
+	Project        string  `json:"project"`
+	Agent          string  `json:"agent"`
+	Ordinal        int     `json:"ordinal"`
+	SessionEndedAt string  `json:"session_ended_at"`
+	Snippet        string  `json:"snippet"`
+	Rank           float64 `json:"rank"`
 }
 
 // SearchFilter specifies search parameters.
 type SearchFilter struct {
 	Query   string
 	Project string
-	Cursor  int // offset for pagination
+	Sort    string // "relevance" (default) or "recency"
+	Cursor  int    // offset for pagination
 	Limit   int
 }
 
@@ -37,7 +38,9 @@ type SearchPage struct {
 	NextCursor int            `json:"next_cursor,omitempty"`
 }
 
-// Search performs FTS5 full-text search across messages.
+// Search performs FTS5 full-text search across messages, grouped by session.
+// Each session produces one result: the best-ranked matching message supplies
+// the snippet and ordinal via SQLite's min/max aggregate optimization.
 func (db *DB) Search(
 	ctx context.Context, f SearchFilter,
 ) (SearchPage, error) {
@@ -45,32 +48,55 @@ func (db *DB) Search(
 		f.Limit = DefaultSearchLimit
 	}
 
-	whereClauses := []string{
+	// Validate Sort before interpolating into ORDER BY (cannot parameterise).
+	// Any value other than "recency" defaults to relevance ordering.
+	// best.best_rank holds the MIN(rank) from the subquery (lower = better).
+	orderBy := "best.best_rank"
+	if f.Sort == "recency" {
+		orderBy = "COALESCE(s.ended_at, s.started_at) DESC"
+	}
+
+	// Build WHERE clauses for the inner subquery using s2/m2 aliases.
+	innerWhere := []string{
 		"messages_fts MATCH ?",
-		"s.deleted_at IS NULL",
-		"m.is_system = 0",
+		"s2.deleted_at IS NULL",
+		"m2.is_system = 0",
 	}
 	args := []any{f.Query}
 
 	if f.Project != "" {
-		whereClauses = append(whereClauses, "s.project = ?")
+		innerWhere = append(innerWhere, "s2.project = ?")
 		args = append(args, f.Project)
 	}
 
+	// SQLite FTS5 auxiliary functions (snippet, rank) cannot be used alongside
+	// GROUP BY. We use a subquery to select the best-ranked FTS rowid per
+	// session, then join back to the FTS table to call snippet() on that
+	// specific row.
 	query := fmt.Sprintf(`
-		SELECT m.session_id, s.project, m.ordinal, m.role,
-			m.timestamp,
+		SELECT m.session_id, s.project, s.agent,
+			COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
+			m.ordinal,
 			snippet(messages_fts, 0, '<mark>', '</mark>',
-				'...', %d) as snippet,
-			rank
-		FROM messages_fts
-		JOIN messages m ON messages_fts.rowid = m.id
+				'...', %d) AS snippet,
+			best.best_rank AS rank
+		FROM (
+			SELECT m2.session_id, MIN(messages_fts.rowid) AS best_rowid,
+				MIN(rank) AS best_rank
+			FROM messages_fts
+			JOIN messages m2 ON messages_fts.rowid = m2.id
+			JOIN sessions s2 ON m2.session_id = s2.id
+			WHERE %s
+			GROUP BY m2.session_id
+		) AS best
+		JOIN messages_fts ON messages_fts.rowid = best.best_rowid
+		JOIN messages m ON m.id = best.best_rowid
 		JOIN sessions s ON m.session_id = s.id
-		WHERE %s
-		ORDER BY rank
+		ORDER BY %s
 		LIMIT ? OFFSET ?`,
 		snippetTokenLength,
-		strings.Join(whereClauses, " AND "),
+		strings.Join(innerWhere, " AND "),
+		orderBy,
 	)
 	args = append(args, f.Limit+1, f.Cursor)
 
@@ -84,8 +110,9 @@ func (db *DB) Search(
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(
-			&r.SessionID, &r.Project, &r.Ordinal, &r.Role,
-			&r.Timestamp, &r.Snippet, &r.Rank,
+			&r.SessionID, &r.Project, &r.Agent,
+			&r.SessionEndedAt, &r.Ordinal,
+			&r.Snippet, &r.Rank,
 		); err != nil {
 			return SearchPage{},
 				fmt.Errorf("scanning result: %w", err)

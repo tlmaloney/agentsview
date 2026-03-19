@@ -219,13 +219,15 @@ func (s *Store) Search(
 	}
 
 	query := fmt.Sprintf(`
-		SELECT m.session_id, s.project, m.ordinal,
-			m.role,
+		SELECT m.session_id, s.project, s.agent,
 			COALESCE(
-				TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
+				TO_CHAR(
+					COALESCE(s.ended_at, s.started_at)
+						AT TIME ZONE 'UTC',
 					'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
 				''
-			),
+			) AS session_ended_at,
+			m.ordinal,
 			CASE WHEN POSITION(
 				LOWER($2) IN LOWER(m.content)) > 100
 				THEN '...' || SUBSTRING(m.content
@@ -258,8 +260,9 @@ func (s *Store) Search(
 	for rows.Next() {
 		var r db.SearchResult
 		if err := rows.Scan(
-			&r.SessionID, &r.Project, &r.Ordinal,
-			&r.Role, &r.Timestamp, &r.Snippet, &r.Rank,
+			&r.SessionID, &r.Project, &r.Agent,
+			&r.SessionEndedAt, &r.Ordinal,
+			&r.Snippet, &r.Rank,
 		); err != nil {
 			return db.SearchPage{},
 				fmt.Errorf(

@@ -1176,7 +1176,7 @@ func TestIsSystemPersisted(t *testing.T) {
 	}
 }
 
-func TestSearch(t *testing.T) {
+func TestSearchBasic(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 
