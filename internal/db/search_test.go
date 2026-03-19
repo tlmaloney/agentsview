@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -156,6 +157,53 @@ func TestSearch(t *testing.T) {
 			t.Error("NextCursor = 0, want non-zero (more results exist)")
 		}
 	})
+}
+
+// TestSearchDeduplicationManyMessages verifies that a session with many
+// matching messages produces exactly one search result. The large message
+// count forces FTS5 to maintain multiple internal index segments, which
+// previously caused the outer JOIN to return one row per segment rather
+// than one row per session.
+func TestSearchDeduplicationManyMessages(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+
+	insertSession(t, d, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-01-01T10:00:00Z")
+		s.EndedAt = Ptr("2024-01-01T11:00:00Z")
+	})
+
+	// Insert enough messages to force multiple FTS5 internal segments.
+	const n = 150
+	msgs := make([]Message, n)
+	for i := range n {
+		msgs[i] = userMsg("s1", i, fmt.Sprintf("needle content message number %d", i))
+	}
+	insertMessages(t, d, msgs...)
+
+	// Optimize the FTS5 index to merge segments, then run multiple inserts to
+	// create new segments again — this simulates the real-world state where
+	// the index has accumulated segments over many sync runs.
+	if _, err := d.getWriter().Exec(
+		"INSERT INTO messages_fts(messages_fts) VALUES('optimize')",
+	); err != nil {
+		t.Fatalf("fts optimize: %v", err)
+	}
+
+	page, err := d.Search(context.Background(), SearchFilter{
+		Query: "needle", Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(page.Results) != 1 {
+		t.Errorf("got %d results for single session with %d matching messages, want 1",
+			len(page.Results), n)
+		for i, r := range page.Results {
+			t.Logf("  result[%d]: session_id=%q ordinal=%d", i, r.SessionID, r.Ordinal)
+		}
+	}
 }
 
 func TestSearchSession(t *testing.T) {
