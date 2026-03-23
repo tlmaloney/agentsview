@@ -885,13 +885,14 @@ if e.claudeLegacyCache {
 	if dirs, ok := e.agentDirs[parser.AgentClaude]; ok {
 		for _, dir := range dirs {
 			cacheFiles := parser.DiscoverClaudeCacheSessions(dir)
-			allFiles = append(allFiles, cacheFiles...)
+			all = append(all, cacheFiles...)
+			counts[parser.AgentClaude] += len(cacheFiles)
 		}
 	}
 }
 ```
 
-(Use the same `allFiles` slice that the Registry loop appends to.)
+(Use the same `all` slice and `counts` map that the Registry loop uses.)
 
 - [ ] **Step 4: Add processClaudeCache method**
 
