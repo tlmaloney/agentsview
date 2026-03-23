@@ -62,12 +62,14 @@ func ParseClaudeCacheSession(
 
 	// Decode entries in timestamp order.
 	var (
-		messages  []ParsedMessage
-		startedAt time.Time
-		endedAt   time.Time
-		ordinal   int
-		userCount int
-		firstMsg  string
+		messages        []ParsedMessage
+		startedAt       time.Time
+		endedAt         time.Time
+		ordinal         int
+		userCount       int
+		firstMsg        string
+		parentSessionID string
+		foundParentSID  bool
 	)
 
 	for _, key := range keys {
@@ -88,6 +90,17 @@ func ParseClaudeCacheSession(
 			if entryType != "user" &&
 				entryType != "assistant" {
 				continue
+			}
+
+			// Capture parentSessionID from the first
+			// user/assistant entry's sessionId field.
+			if !foundParentSID {
+				if sid := gjson.Get(entry, "sessionId").Str; sid != "" {
+					foundParentSID = true
+					if sid != sessionID {
+						parentSessionID = sid
+					}
+				}
 			}
 
 			ts := extractTimestamp(entry)
@@ -161,6 +174,7 @@ func ParseClaudeCacheSession(
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentClaude,
+		ParentSessionID:  parentSessionID,
 		FirstMessage:     firstMsg,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,

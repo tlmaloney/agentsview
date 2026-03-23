@@ -1260,7 +1260,11 @@ func (e *Engine) processFile(
 	var res processResult
 	switch file.Agent {
 	case parser.AgentClaude:
-		res = e.processClaude(file, info)
+		if strings.HasSuffix(file.Path, ".json") {
+			res = e.processClaudeCache(file, info)
+		} else {
+			res = e.processClaude(file, info)
+		}
 	case parser.AgentCodex:
 		res = e.processCodex(file, info)
 	case parser.AgentCopilot:
@@ -1412,6 +1416,36 @@ func (e *Engine) processClaude(
 		}
 	}
 
+	parser.InferRelationshipTypes(results)
+
+	return processResult{results: results}
+}
+
+// processClaudeCache parses a Claude JSON cache file.
+func (e *Engine) processClaudeCache(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	results, err := parser.ParseClaudeCacheSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if len(results) == 0 ||
+		results[0].Session.MessageCount == 0 {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		for i := range results {
+			results[i].Session.File.Hash = hash
+		}
+	}
 	parser.InferRelationshipTypes(results)
 
 	return processResult{results: results}
@@ -2404,6 +2438,10 @@ func (e *Engine) SyncCacheFiles(
 		)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", f.Path, err))
+			continue
+		}
+		if len(results) == 0 ||
+			results[0].Session.MessageCount == 0 {
 			continue
 		}
 
