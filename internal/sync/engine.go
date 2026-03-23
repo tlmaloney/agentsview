@@ -2278,7 +2278,13 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
 		} else {
-			file.Project = filepath.Base(filepath.Dir(path))
+			parentDir := filepath.Dir(path)
+			// Cache files live at <project>/cache/<id>.json;
+			// go one extra level up to get the project name.
+			if filepath.Base(parentDir) == "cache" {
+				parentDir = filepath.Dir(parentDir)
+			}
+			file.Project = filepath.Base(parentDir)
 		}
 	case parser.AgentCursor:
 		// path is <cursorDir>/<project>/agent-transcripts/<uuid>.txt
