@@ -12,18 +12,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// extractClaudeTokenFields populates the Model field on an
-// assistant ParsedMessage from the raw JSON entry. The entry
-// is expected to have a "message.model" field.
-func extractClaudeTokenFields(msg *ParsedMessage, entry string) {
-	msg.Model = gjson.Get(entry, "message.model").Str
-}
-
-// sumTokenUsage is a placeholder for aggregating token usage
-// from messages into the session. Token totals are not yet
-// stored on ParsedSession.
-func sumTokenUsage(_ *ParsedSession, _ []ParsedMessage) {}
-
 // ParseClaudeCacheSession parses a Claude Code JSON cache
 // session file. These are older session files stored as a
 // single JSON object keyed by timestamps, found in cache/
