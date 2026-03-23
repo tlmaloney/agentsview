@@ -212,7 +212,9 @@ func FindClaudeSourceFile(
 		}
 	}
 
-	return ""
+	// Fallback: check cache/ subdirectories for legacy
+	// JSON session files.
+	return FindClaudeCacheSourceFile(projectsDir, sessionID)
 }
 
 // DiscoverClaudeCacheSessions finds JSON session cache files

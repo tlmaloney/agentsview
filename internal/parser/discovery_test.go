@@ -1438,3 +1438,53 @@ func TestDiscoverClaudeCacheSessions(t *testing.T) {
 		})
 	}
 }
+
+func TestFindClaudeCacheSourceFile(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     map[string]string
+		sessionID string
+		wantFound bool
+	}{
+		{
+			name: "finds cache file by session ID",
+			files: map[string]string{
+				"proj1/cache/abc123.json": "{}",
+			},
+			sessionID: "abc123",
+			wantFound: true,
+		},
+		{
+			name: "returns empty when not found",
+			files: map[string]string{
+				"proj1/cache/other.json": "{}",
+			},
+			sessionID: "abc123",
+			wantFound: false,
+		},
+		{
+			name: "returns empty when no cache dirs",
+			files: map[string]string{
+				"proj1/session.jsonl": "",
+			},
+			sessionID: "abc123",
+			wantFound: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			setupFileSystem(t, dir, tt.files)
+			got := FindClaudeCacheSourceFile(
+				dir, tt.sessionID,
+			)
+			if tt.wantFound && got == "" {
+				t.Error("expected to find file, got empty")
+			}
+			if !tt.wantFound && got != "" {
+				t.Errorf("expected empty, got %q", got)
+			}
+		})
+	}
+}
