@@ -2388,6 +2388,53 @@ func (e *Engine) syncSingleOpenCode(
 	return fmt.Errorf("opencode session %s not found", sessionID)
 }
 
+// SyncCacheFiles parses and syncs a list of Claude JSON cache
+// session files discovered via parser.DiscoverClaudeCacheSessions.
+// It returns the number of sessions synced and any per-file errors.
+// The sync mutex is held for the duration of the operation.
+func (e *Engine) SyncCacheFiles(
+	files []parser.DiscoveredFile,
+) (synced int, errs []error) {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+
+	for _, f := range files {
+		results, err := parser.ParseClaudeCacheSession(
+			f.Path, f.Project, e.machine,
+		)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", f.Path, err))
+			continue
+		}
+
+		hash, hashErr := ComputeFileHash(f.Path)
+		if hashErr != nil {
+			log.Printf("warning: hashing %s: %v", f.Path, hashErr)
+		}
+		for i := range results {
+			results[i].Session.File.Hash = hash
+		}
+
+		parser.InferRelationshipTypes(results)
+
+		for _, pr := range results {
+			pw := pendingWrite{sess: pr.Session, msgs: pr.Messages}
+			if err := e.writeSessionFull(pw); err != nil {
+				if !errors.Is(err, db.ErrSessionExcluded) {
+					errs = append(errs, fmt.Errorf(
+						"write session %s: %w",
+						pr.Session.ID, err,
+					))
+				}
+				continue
+			}
+			synced++
+		}
+	}
+
+	return synced, errs
+}
+
 func strPtr(s string) *string {
 	if s == "" {
 		return nil

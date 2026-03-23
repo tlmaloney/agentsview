@@ -55,6 +55,9 @@ func main() {
 		case "token-use":
 			runTokenUse(os.Args[2:])
 			return
+		case "claudejson":
+			runClaudeJSON(os.Args[2:])
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("agentsview %s (commit %s, built %s)\n",
 				version, commit, buildDate)
@@ -83,6 +86,7 @@ Usage:
   agentsview pg status        Show PG sync status
   agentsview pg serve [flags] Serve from PostgreSQL (read-only)
   agentsview token-use <id>   Show token usage for a session (JSON)
+  agentsview claudejson sync  Sync older Claude JSON cache session files
   agentsview prune [flags]    Delete sessions matching filters
   agentsview update [flags]   Check for and install updates
   agentsview version          Show version information
