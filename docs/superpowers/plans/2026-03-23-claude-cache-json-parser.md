@@ -6,12 +6,13 @@
 > use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Parse older Claude Code session files stored as single JSON
-objects in `cache/` subdirectories, opt-in via config flag.
+objects in `cache/` subdirectories, triggered via `agentsview claudejson sync`.
 
 **Architecture:** New `ParseClaudeCacheSession` parser reads JSON cache
-files linearly, reusing existing content extraction. Discovery,
-config, and sync engine are extended to support the new file format
-behind a `claude_legacy_cache` boolean flag.
+files linearly, reusing existing content extraction. A new CLI
+subcommand `agentsview claudejson sync` discovers cache files, parses
+them, and writes results to the database. No config flag or sync engine
+changes needed.
 
 **Tech Stack:** Go, gjson, SQLite (existing), table-driven tests
 
@@ -28,9 +29,9 @@ behind a `claude_legacy_cache` boolean flag.
 | Create | `internal/parser/claude_cache_test.go` | Table-driven parser tests |
 | Modify | `internal/parser/discovery.go` | Add `DiscoverClaudeCacheSessions`, `FindClaudeCacheSourceFile` |
 | Modify | `internal/parser/discovery_test.go` | Tests for cache discovery |
-| Modify | `internal/config/config.go` | Add `ClaudeLegacyCache` field |
-| Modify | `internal/sync/engine.go` | Add `ClaudeLegacyCache` to `EngineConfig`, discovery integration, `processClaudeCache` |
-| Modify | `cmd/agentsview/main.go` | Thread config flag into `EngineConfig` |
+| Create | `cmd/agentsview/claudejson.go` | CLI subcommand `agentsview claudejson sync` |
+| Modify | `cmd/agentsview/main.go` | Register `claudejson` subcommand |
+| Modify | `internal/sync/engine.go` | Add exported `SyncCacheFiles` method |
 
 ---
 
@@ -816,179 +817,211 @@ git commit -m "feat: add Claude cache session discovery"
 
 ---
 
-### Task 5: Config Flag
+### Task 5: CLI Subcommand and Sync Method
 
 **Files:**
-- Modify: `internal/config/config.go`
-
-- [ ] **Step 1: Add ClaudeLegacyCache field to Config**
-
-In `internal/config/config.go`, add the field to the `Config` struct
-after the `ResultContentBlockedCategories` field (around line 93):
-
-```go
-ClaudeLegacyCache bool `json:"claude_legacy_cache" toml:"claude_legacy_cache"`
-```
-
-- [ ] **Step 2: Verify compilation**
-
-Run: `cd /home/tmaloney/gitdev/com.github/tlmaloney/agentsview && CGO_ENABLED=1 go build -tags fts5 ./...`
-
-Expected: Compiles successfully.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add internal/config/config.go
-git commit -m "feat: add claude_legacy_cache config flag"
-```
-
----
-
-### Task 6: Sync Engine Integration
-
-**Files:**
-- Modify: `internal/sync/engine.go`
+- Create: `cmd/agentsview/claudejson.go`
 - Modify: `cmd/agentsview/main.go`
+- Modify: `internal/sync/engine.go`
 
-- [ ] **Step 1: Add ClaudeLegacyCache to EngineConfig**
+- [ ] **Step 1: Add SyncCacheFiles method to Engine**
 
-In `internal/sync/engine.go`, add to the `EngineConfig` struct (around
-line 28):
-
-```go
-ClaudeLegacyCache bool
-```
-
-- [ ] **Step 2: Store the flag in Engine**
-
-Add a field to the `Engine` struct (around line 35):
+In `internal/sync/engine.go`, add an exported method that takes
+discovered cache files and writes them to the DB. This reuses
+the existing `writeSessionFull` path (which calls `UpsertSession`
+and `ReplaceSessionMessages`) via the unexported `pendingWrite`
+and conversion helpers already in the engine:
 
 ```go
-claudeLegacyCache bool
-```
+// SyncCacheFiles parses and writes Claude JSON cache files
+// to the database. Always performs a full sync (no skip
+// cache). Returns the number of sessions synced and any
+// errors encountered.
+func (e *Engine) SyncCacheFiles(
+	files []parser.DiscoveredFile,
+) (synced int, errs []error) {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
 
-In `NewEngine` (around line 56), assign it:
+	for _, file := range files {
+		results, err := parser.ParseClaudeCacheSession(
+			file.Path, file.Project, e.machine,
+		)
+		if err != nil {
+			errs = append(errs, fmt.Errorf(
+				"%s: %w", file.Path, err,
+			))
+			continue
+		}
+		if len(results) == 0 ||
+			results[0].Session.MessageCount == 0 {
+			continue
+		}
 
-```go
-claudeLegacyCache: cfg.ClaudeLegacyCache,
-```
+		hash, hErr := ComputeFileHash(file.Path)
+		if hErr == nil {
+			for i := range results {
+				results[i].Session.File.Hash = hash
+			}
+		}
+		parser.InferRelationshipTypes(results)
 
-- [ ] **Step 3: Add cache discovery to syncAllLocked**
-
-In `syncAllLocked`, after the main Registry discovery loop (around
-line 860, after the `for _, def := range parser.Registry` block), add:
-
-```go
-// Discover Claude legacy cache sessions if enabled.
-if e.claudeLegacyCache {
-	if dirs, ok := e.agentDirs[parser.AgentClaude]; ok {
-		for _, dir := range dirs {
-			cacheFiles := parser.DiscoverClaudeCacheSessions(dir)
-			all = append(all, cacheFiles...)
-			counts[parser.AgentClaude] += len(cacheFiles)
+		for _, r := range results {
+			pw := pendingWrite{
+				sess: r.Session,
+				msgs: r.Messages,
+			}
+			if wErr := e.writeSessionFull(pw); wErr != nil {
+				errs = append(errs, fmt.Errorf(
+					"%s: %w", r.Session.ID, wErr,
+				))
+				continue
+			}
+			synced++
 		}
 	}
+	return synced, errs
 }
 ```
 
-(Use the same `all` slice and `counts` map that the Registry loop uses.)
+Note: this requires adding `"fmt"` to the imports if not already
+present.
 
-- [ ] **Step 4: Add processClaudeCache method**
+- [ ] **Step 2: Create claudejson.go**
 
-Add a new method to `Engine`, modeled on `processClaude` but simpler
-(no incremental parsing, no project hints). Note: uses
-`shouldSkipByPath` (not `shouldSkipFile` which takes a session ID),
-`ComputeFileHash` (not `hashFile`), and returns `processResult{}`
-for empty/error cases (no `markSkipped` method exists -- the caller
-handles skip-cache population):
+Create `cmd/agentsview/claudejson.go` modeled on
+`cmd/agentsview/sync.go`:
 
 ```go
-// processClaudeCache parses a Claude JSON cache file.
-func (e *Engine) processClaudeCache(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
+package main
+
+import (
+	"encoding/base64"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/wesm/agentsview/internal/config"
+	"github.com/wesm/agentsview/internal/db"
+	"github.com/wesm/agentsview/internal/parser"
+	"github.com/wesm/agentsview/internal/sync"
+)
+
+func runClaudeJSON(args []string) {
+	if len(args) == 0 || args[0] != "sync" {
+		fmt.Fprintln(os.Stderr,
+			"usage: agentsview claudejson sync")
+		os.Exit(1)
 	}
 
-	results, err := parser.ParseClaudeCacheSession(
-		file.Path, file.Project, e.machine,
-	)
+	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		return processResult{err: err}
-	}
-	if len(results) == 0 ||
-		results[0].Session.MessageCount == 0 {
-		return processResult{}
+		log.Fatalf("loading config: %v", err)
 	}
 
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		for i := range results {
-			results[i].Session.File.Hash = hash
+	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
+		log.Fatalf("creating data dir: %v", err)
+	}
+
+	setupLogFile(appCfg.DataDir)
+
+	database, err := db.Open(appCfg.DBPath)
+	if err != nil {
+		fatal("opening database: %v", err)
+	}
+	defer database.Close()
+
+	if appCfg.CursorSecret != "" {
+		secret, decErr := base64.StdEncoding.DecodeString(
+			appCfg.CursorSecret,
+		)
+		if decErr != nil {
+			fatal("invalid cursor secret: %v", decErr)
 		}
+		database.SetCursorSecret(secret)
 	}
-	parser.InferRelationshipTypes(results)
 
-	return processResult{results: results}
+	// Discover cache files from Claude project directories.
+	dirs := appCfg.ResolveDirs(parser.AgentClaude)
+	var allFiles []parser.DiscoveredFile
+	for _, dir := range dirs {
+		files := parser.DiscoverClaudeCacheSessions(dir)
+		allFiles = append(allFiles, files...)
+	}
+
+	if len(allFiles) == 0 {
+		fmt.Println("No Claude JSON cache files found.")
+		return
+	}
+
+	fmt.Printf(
+		"Found %d cache files. Syncing...\n",
+		len(allFiles),
+	)
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: appCfg.AgentDirs,
+		Machine:   "local",
+	})
+
+	synced, errs := engine.SyncCacheFiles(allFiles)
+
+	for _, e := range errs {
+		log.Printf("error: %v", e)
+	}
+
+	fmt.Printf(
+		"Synced %d sessions (%d errors).\n",
+		synced, len(errs),
+	)
 }
 ```
 
-- [ ] **Step 5: Route .json files to processClaudeCache in dispatch**
+- [ ] **Step 3: Register subcommand in main.go**
 
-In the `processFile` method's switch statement (around line 1261),
-modify the `case parser.AgentClaude:` branch to check the file
-extension:
-
-```go
-case parser.AgentClaude:
-	if strings.HasSuffix(file.Path, ".json") {
-		res = e.processClaudeCache(file, info)
-	} else {
-		res = e.processClaude(file, info)
-	}
-```
-
-This replaces the existing single-line `res = e.processClaude(file, info)`.
-
-- [ ] **Step 6: Thread config flag in main.go**
-
-In `cmd/agentsview/main.go`, where `EngineConfig` is constructed
-(around line 218), add:
+In `cmd/agentsview/main.go`, add to the switch in `main()` (around
+line 56, before the `version` case):
 
 ```go
-ClaudeLegacyCache: cfg.ClaudeLegacyCache,
+case "claudejson":
+	runClaudeJSON(os.Args[2:])
+	return
 ```
 
-- [ ] **Step 7: Verify compilation**
+Also add to `printUsage()` (around line 86):
+
+```
+  agentsview claudejson sync  Sync Claude JSON cache files
+```
+
+- [ ] **Step 4: Verify compilation**
 
 Run: `cd /home/tmaloney/gitdev/com.github/tlmaloney/agentsview && CGO_ENABLED=1 go build -tags fts5 ./...`
 
 Expected: Compiles successfully.
 
-- [ ] **Step 8: Run go vet and fmt**
+- [ ] **Step 5: Run go vet and fmt**
 
 Run: `cd /home/tmaloney/gitdev/com.github/tlmaloney/agentsview && go fmt ./... && go vet ./...`
 
 Expected: No issues.
 
-- [ ] **Step 9: Run full test suite**
+- [ ] **Step 6: Run full test suite**
 
 Run: `cd /home/tmaloney/gitdev/com.github/tlmaloney/agentsview && CGO_ENABLED=1 go test -tags fts5 ./... -short`
 
 Expected: All tests pass.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/sync/engine.go cmd/agentsview/main.go
-git commit -m "feat: integrate Claude cache parser into sync engine"
+git add cmd/agentsview/claudejson.go cmd/agentsview/main.go internal/sync/engine.go
+git commit -m "feat: add claudejson sync subcommand"
 ```
 
 ---
 
-### Task 7: FindClaudeSourceFile Fallback and Test
+### Task 6: FindClaudeSourceFile Fallback and Test
 
 **Files:**
 - Modify: `internal/parser/discovery.go`
@@ -1089,7 +1122,7 @@ git commit -m "feat: add cache fallback to FindClaudeSourceFile"
 
 ---
 
-### Task 8: Final Verification
+### Task 7: Final Verification
 
 - [ ] **Step 1: Run go fmt and go vet**
 
@@ -1111,8 +1144,8 @@ Expected: No new warnings.
 
 - [ ] **Step 4: Manual smoke test**
 
-1. Add `claude_legacy_cache = true` to
-   `~/.agentsview/config.toml`
-2. Run `make dev`
-3. Verify cache sessions appear in the session list
-4. Remove the config line when done testing
+1. Run `make build`
+2. Run `./agentsview claudejson sync`
+3. Verify output shows discovered and synced cache sessions
+4. Start the server with `make dev` and verify cache sessions
+   appear in the session list

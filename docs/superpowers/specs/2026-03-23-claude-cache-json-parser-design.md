@@ -101,62 +101,40 @@ func FindClaudeCacheSourceFile(projectsDir, sessionID string) string
 
 1. Searches `<project>/cache/<sessionID>.json` across project
    directories.
-2. Called as a fallback from `FindClaudeSourceFile` when the `.jsonl`
-   lookup fails and `ClaudeLegacyCache` is enabled. This ensures
-   existing source-file lookups for cache-originated sessions resolve
-   correctly without modifying the `AgentDef.FindSourceFunc` signature.
+2. Called as an unconditional fallback from `FindClaudeSourceFile` when
+   the `.jsonl` lookup fails. This is harmless (returns `""` when no
+   file exists) and ensures source-file lookups for cache-originated
+   sessions resolve correctly.
 
-### 3. Config: `internal/config/config.go`
+### 3. CLI subcommand: `cmd/agentsview/claudejson.go`
 
-New field on `Config`:
+New subcommand `agentsview claudejson sync` that performs a one-shot
+full sync of JSON cache files. Modeled on `runSync` in
+`cmd/agentsview/sync.go`.
 
-```go
-ClaudeLegacyCache bool `json:"claude_legacy_cache" toml:"claude_legacy_cache"`
+```
+Usage: agentsview claudejson sync
 ```
 
-Default: `false`. Enables scanning of `cache/` subdirectories. TOML
-config only (no env var). Threaded from `Config` into `EngineConfig` in
-`main.go` when constructing the sync engine.
+Behavior:
 
-### 4. Sync engine: `internal/sync/engine.go`
+1. Load config, open the database (same pattern as `runSync`).
+2. Discover cache files via `DiscoverClaudeCacheSessions` on each
+   Claude project directory from `Config.AgentDirs`.
+3. Parse each file with `ParseClaudeCacheSession`.
+4. Write results to the database using `db.UpsertSession` and
+   `db.UpsertMessages` (or the batch write path used by the sync
+   engine).
+5. Print summary: files found, sessions synced, errors.
 
-New field on `EngineConfig`:
+This is always a full sync — no skip cache, no incremental parsing.
+The `UpsertSession` path handles deduplication naturally: if a JSONL
+session already exists with the same ID, its data is overwritten (but
+since JSONL sessions are more authoritative, users should run regular
+sync first).
 
-```go
-ClaudeLegacyCache bool
-```
-
-**Discovery integration:** In `syncAllLocked`, after the normal
-`Registry`-driven discovery loop, add a conditional block: if
-`ClaudeLegacyCache` is true, call `DiscoverClaudeCacheSessions` on each
-Claude project directory and append the results to the Claude work
-queue. This is a special case after the main loop, not a Registry
-modification.
-
-**Dispatch:** Add a new `processClaudeCache` method (parallel to
-`processClaude`) that:
-
-1. Calls `ParseClaudeCacheSession` directly (no incremental parsing, no
-   `ExtractClaudeProjectHints`, no `tryIncrementalJSONL`).
-2. Returns the `ParseResult` for storage.
-
-The `.json` extension is used to distinguish cache files from JSONL
-files in the Claude dispatch path.
-
-**Deduplication:** If a JSONL session already exists in the database
-with the same session ID, the cache file is skipped. JSONL-parsed
-sessions are considered more authoritative. The existing `UpsertSession`
-path handles this naturally — JSONL files are discovered first, so their
-data is already in the DB. Cache files with a matching session ID are
-added to the skip cache.
-
-**File watcher:** Cache files are static and do not change after
-creation. No watcher integration is needed. Cache sessions are
-discovered only during full periodic syncs (every 15 min) and the
-initial startup sync.
-
-**Stats:** Cache file counts are included in the existing Claude agent
-count in sync stats and log output.
+No config flag is needed. No changes to `EngineConfig` or the sync
+engine. No file watcher integration.
 
 ### 5. Testing
 
@@ -182,10 +160,9 @@ count in sync stats and log output.
 | Sessions per file | One | Simpler; historical data does not need fork splitting |
 | `agent-*.json` handling | Parse as standalone sessions | Simple; no subagent linking needed |
 | `_no_timestamp` / summaries | Skip | Not conversation messages; no mapping to `ParsedMessage` |
-| Opt-in mechanism | TOML config flag | Historical feature; most users don't have these files |
+| Trigger mechanism | CLI subcommand (`claudejson sync`) | On-demand; no automatic sync integration |
 | DAG/fork detection | None (linear) | Agreed during design; keeps parser simple |
-| Deduplication | Skip cache file if JSONL session exists | JSONL is more authoritative |
-| File watcher | Not needed | Cache files are static |
+| Deduplication | UpsertSession handles conflicts | Last write wins; run regular sync first for JSONL priority |
+| File watcher | Not needed | Cache files are static; CLI-triggered only |
 | Project name | From directory structure | Cache files lack reliable cwd/gitBranch hints |
 | File size | `os.ReadFile` (no streaming) | Observed cache files are under 1 MB |
-| Sync dispatch | Separate `processClaudeCache` method | Avoids contaminating JSONL-specific logic |
