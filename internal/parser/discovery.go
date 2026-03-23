@@ -215,6 +215,79 @@ func FindClaudeSourceFile(
 	return ""
 }
 
+// DiscoverClaudeCacheSessions finds JSON session cache files
+// under the Claude projects dir. These are older session files
+// stored at <project>/cache/<uuid>.json.
+func DiscoverClaudeCacheSessions(
+	projectsDir string,
+) []DiscoveredFile {
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return nil
+	}
+
+	var files []DiscoveredFile
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, projectsDir) {
+			continue
+		}
+
+		cacheDir := filepath.Join(
+			projectsDir, entry.Name(), "cache",
+		)
+		cacheFiles, err := os.ReadDir(cacheDir)
+		if err != nil {
+			continue
+		}
+
+		for _, cf := range cacheFiles {
+			if cf.IsDir() {
+				continue
+			}
+			name := cf.Name()
+			if !strings.HasSuffix(name, ".json") {
+				continue
+			}
+			if name == "index.json" {
+				continue
+			}
+			files = append(files, DiscoveredFile{
+				Path:    filepath.Join(cacheDir, name),
+				Project: entry.Name(),
+				Agent:   AgentClaude,
+			})
+		}
+	}
+
+	return files
+}
+
+// FindClaudeCacheSourceFile locates a Claude cache session
+// file by session ID. Searches <project>/cache/<id>.json
+// across all project directories.
+func FindClaudeCacheSourceFile(
+	projectsDir, sessionID string,
+) string {
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return ""
+	}
+
+	target := sessionID + ".json"
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, projectsDir) {
+			continue
+		}
+		path := filepath.Join(
+			projectsDir, entry.Name(), "cache", target,
+		)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 // FindCodexSourceFile finds a Codex session file by UUID.
 // Searches the year/month/day directory structure for files matching
 // rollout-{timestamp}-{uuid}.jsonl.
