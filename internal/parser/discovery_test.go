@@ -28,38 +28,65 @@ func setupFileSystem(t *testing.T, dir string, files map[string]string) {
 	}
 }
 
-// assertDiscoveredFiles verifies that the discovered files match the expected filenames and agent type.
+// assertDiscoveredFiles verifies that the discovered files
+// match the expected filenames and agent type. wantFilenames
+// entries may be bare basenames ("abc.jsonl") or relative
+// path suffixes ("proj/cache/abc.json"); each is matched
+// against the suffix of the full path.
 func assertDiscoveredFiles(t *testing.T, got []DiscoveredFile, wantFilenames []string, wantAgent AgentType) {
 	t.Helper()
 
-	want := make(map[string]bool)
-	for _, f := range wantFilenames {
-		want[f] = true
+	// pathKey returns a normalized key for a discovered path
+	// suitable for matching against a wantFilename entry:
+	// if wantFilename contains a separator we match against the
+	// full path suffix; otherwise we match the basename only.
+	pathMatches := func(fullPath, want string) bool {
+		if strings.ContainsRune(want, filepath.Separator) ||
+			strings.ContainsRune(want, '/') {
+			suffix := string(filepath.Separator) + filepath.FromSlash(want)
+			return strings.HasSuffix(fullPath, suffix) ||
+				fullPath == filepath.FromSlash(want)
+		}
+		return filepath.Base(fullPath) == want
 	}
 
-	gotMap := make(map[string]bool)
 	for _, f := range got {
-		base := filepath.Base(f.Path)
-		gotMap[base] = true
 		if f.Agent != wantAgent {
-			t.Errorf("file %q: agent = %q, want %q", base, f.Agent, wantAgent)
+			t.Errorf(
+				"file %q: agent = %q, want %q",
+				f.Path, f.Agent, wantAgent,
+			)
 		}
 	}
 
-	if len(got) != len(want) {
-		t.Errorf("got %d files total, want %d", len(got), len(want))
+	if len(got) != len(wantFilenames) {
+		t.Errorf("got %d files total, want %d", len(got), len(wantFilenames))
 	}
 
-	for file := range want {
-		if !gotMap[file] {
-			t.Errorf("missing expected file: %q", file)
+	for _, want := range wantFilenames {
+		found := false
+		for _, f := range got {
+			if pathMatches(f.Path, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected file: %q", want)
 		}
 	}
 
 	// Check for unexpected files
-	for file := range gotMap {
-		if !want[file] {
-			t.Errorf("got unexpected file: %q", file)
+	for _, f := range got {
+		matched := false
+		for _, want := range wantFilenames {
+			if pathMatches(f.Path, want) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("got unexpected file: %q", filepath.Base(f.Path))
 		}
 	}
 }
@@ -1328,4 +1355,86 @@ func TestIsPiSessionFile(t *testing.T) {
 			t.Error("expected false for empty file")
 		}
 	})
+}
+
+func TestDiscoverClaudeCacheSessions(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     map[string]string
+		wantFiles []string
+	}{
+		{
+			name: "finds json files in cache subdirs",
+			files: map[string]string{
+				"proj1/cache/abc123.json": "{}",
+				"proj1/cache/def456.json": "{}",
+				"proj1/session1.jsonl":    "",
+			},
+			wantFiles: []string{
+				"proj1/cache/abc123.json",
+				"proj1/cache/def456.json",
+			},
+		},
+		{
+			name: "skips index.json",
+			files: map[string]string{
+				"proj1/cache/abc123.json": "{}",
+				"proj1/cache/index.json":  "{}",
+			},
+			wantFiles: []string{
+				"proj1/cache/abc123.json",
+			},
+		},
+		{
+			name: "skips non-json files",
+			files: map[string]string{
+				"proj1/cache/abc123.json": "{}",
+				"proj1/cache/notes.txt":   "",
+				"proj1/cache/data.jsonl":  "",
+			},
+			wantFiles: []string{
+				"proj1/cache/abc123.json",
+			},
+		},
+		{
+			name: "includes agent json files",
+			files: map[string]string{
+				"proj1/cache/abc123.json":    "{}",
+				"proj1/cache/agent-xyz.json": "{}",
+			},
+			wantFiles: []string{
+				"proj1/cache/abc123.json",
+				"proj1/cache/agent-xyz.json",
+			},
+		},
+		{
+			name: "no cache dir returns empty",
+			files: map[string]string{
+				"proj1/session1.jsonl": "",
+			},
+			wantFiles: nil,
+		},
+		{
+			name: "multiple projects with caches",
+			files: map[string]string{
+				"proj1/cache/a.json": "{}",
+				"proj2/cache/b.json": "{}",
+			},
+			wantFiles: []string{
+				"proj1/cache/a.json",
+				"proj2/cache/b.json",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			setupFileSystem(t, dir, tt.files)
+			got := DiscoverClaudeCacheSessions(dir)
+			assertDiscoveredFiles(
+				t, got, tt.wantFiles, AgentClaude,
+			)
+		})
+	}
 }
