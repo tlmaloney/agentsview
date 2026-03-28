@@ -83,7 +83,7 @@ func TestPGPushCycle(t *testing.T) {
 		t.Fatalf("insert message: %v", err)
 	}
 
-	pushResult, err := ps.Push(ctx, false)
+	pushResult, err := ps.Push(ctx, PushOptions{})
 	if err != nil {
 		t.Fatalf("push: %v", err)
 	}

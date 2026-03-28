@@ -36,11 +36,28 @@ type PushResult struct {
 	Duration       time.Duration
 }
 
+// PushOptions configures a Push operation.
+type PushOptions struct {
+	// Full bypasses the per-message content heuristic and
+	// re-pushes every candidate session's messages.
+	Full bool
+	// AgentFilter is a comma-separated list of agent names
+	// (e.g. "codex,claude"). When non-empty, only sessions
+	// whose Agent field matches one of the listed names are
+	// pushed. The watermark is not advanced for filtered
+	// pushes since not all sessions were evaluated.
+	AgentFilter string
+}
+
 // Push syncs local sessions and messages to PostgreSQL.
 // Only sessions modified since the last push are processed.
-// When full is true, the per-message content heuristic is
+// When opts.Full is true, the per-message content heuristic is
 // bypassed and every candidate session's messages are
 // re-pushed unconditionally.
+//
+// When opts.AgentFilter is set, only matching sessions are
+// pushed and the watermark is not advanced (since the push
+// is partial).
 //
 // Known limitation: sessions that are permanently deleted
 // from SQLite (via prune) are not propagated as deletions
@@ -49,8 +66,10 @@ type PushResult struct {
 // Use a direct PG DELETE to remove permanently pruned
 // sessions from PG if needed.
 func (s *Sync) Push(
-	ctx context.Context, full bool,
+	ctx context.Context, opts PushOptions,
 ) (PushResult, error) {
+	full := opts.Full
+	agentSet := parseAgentFilter(opts.AgentFilter)
 	start := time.Now()
 	var result PushResult
 
@@ -187,6 +206,15 @@ func (s *Sync) Push(
 		}
 	}
 
+	// Filter by agent when requested.
+	if len(agentSet) > 0 {
+		for id, sess := range sessionByID {
+			if !agentSet[sess.Agent] {
+				delete(sessionByID, id)
+			}
+		}
+	}
+
 	var sessions []db.Session
 	for _, sess := range sessionByID {
 		sessions = append(sessions, sess)
@@ -239,6 +267,14 @@ func (s *Sync) Push(
 				result.Errors++
 			}
 		}
+	}
+
+	// When an agent filter is active this is a partial push —
+	// do not advance the watermark so unfiltered agents are
+	// still evaluated on the next full push.
+	if len(agentSet) > 0 {
+		result.Duration = time.Since(start)
+		return result, nil
 	}
 
 	// When all sessions succeeded, advance the watermark to
@@ -1071,4 +1107,24 @@ func nilIfZero(n int) any {
 		return nil
 	}
 	return n
+}
+
+// parseAgentFilter splits a comma-separated agent list into a
+// set for O(1) lookup. Returns nil for an empty filter string.
+func parseAgentFilter(s string) map[string]bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	m := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		if a := strings.TrimSpace(p); a != "" {
+			m[a] = true
+		}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }

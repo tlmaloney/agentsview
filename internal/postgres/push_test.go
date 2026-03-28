@@ -402,6 +402,47 @@ func TestNilIfEmptySanitizes(t *testing.T) {
 	}
 }
 
+func TestParseAgentFilter(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  map[string]bool
+	}{
+		{"empty", "", nil},
+		{"whitespace only", "  ", nil},
+		{"single agent", "codex", map[string]bool{"codex": true}},
+		{"two agents", "codex,claude",
+			map[string]bool{"codex": true, "claude": true}},
+		{"with spaces", " codex , claude ",
+			map[string]bool{"codex": true, "claude": true}},
+		{"trailing comma", "codex,",
+			map[string]bool{"codex": true}},
+		{"leading comma", ",codex",
+			map[string]bool{"codex": true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseAgentFilter(tt.input)
+			if tt.want == nil {
+				if got != nil {
+					t.Fatalf("got %v, want nil", got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for k := range tt.want {
+				if !got[k] {
+					t.Fatalf(
+						"missing key %q in %v", k, got,
+					)
+				}
+			}
+		})
+	}
+}
+
 func TestNilStrSanitizes(t *testing.T) {
 	s := "hello\xe2world"
 	got := nilStr(&s)

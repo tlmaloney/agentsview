@@ -42,6 +42,8 @@ func runPGPush(args []string) {
 	fs := flag.NewFlagSet("pg push", flag.ExitOnError)
 	full := fs.Bool("full", false,
 		"Force full local resync and PG push")
+	agentFilter := fs.String("agent", "",
+		"Comma-separated list of agents to push (e.g. codex,claude)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("parsing flags: %v", err)
 	}
@@ -103,7 +105,11 @@ func runPGPush(args []string) {
 	if err := ps.EnsureSchema(ctx); err != nil {
 		fatal("pg push schema: %v", err)
 	}
-	result, err := ps.Push(ctx, forceFull)
+	opts := postgres.PushOptions{
+		Full:        forceFull,
+		AgentFilter: *agentFilter,
+	}
+	result, err := ps.Push(ctx, opts)
 	if err != nil {
 		fatal("pg push: %v", err)
 	}
