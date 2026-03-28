@@ -1076,6 +1076,84 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 	}
 }
 
+func TestPushAgentFilterDoesNotAdvanceWatermark(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	started := "2026-03-28T12:00:00Z"
+	// Insert a claude session.
+	if err := local.UpsertSession(db.Session{
+		ID:           "sess-claude",
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "claude",
+		StartedAt:    &started,
+		MessageCount: 1,
+	}); err != nil {
+		t.Fatalf("upsert claude session: %v", err)
+	}
+	if err := local.InsertMessages([]db.Message{
+		{SessionID: "sess-claude", Ordinal: 0, Role: "user", Content: "hello"},
+	}); err != nil {
+		t.Fatalf("insert claude message: %v", err)
+	}
+
+	// Push only codex sessions — should match nothing.
+	result, err := ps.Push(ctx, PushOptions{
+		Full:        true,
+		AgentFilter: "codex",
+	})
+	if err != nil {
+		t.Fatalf("filtered push: %v", err)
+	}
+	if result.SessionsPushed != 0 {
+		t.Errorf(
+			"sessions pushed = %d, want 0",
+			result.SessionsPushed,
+		)
+	}
+
+	// Watermark must not have advanced.
+	watermark, err := local.GetSyncState("last_push_at")
+	if err != nil {
+		t.Fatalf("reading watermark: %v", err)
+	}
+	if watermark != "" {
+		t.Errorf(
+			"watermark = %q, want empty (not advanced)",
+			watermark,
+		)
+	}
+
+	// An unfiltered full push should still pick up the session.
+	result2, err := ps.Push(ctx, PushOptions{Full: true})
+	if err != nil {
+		t.Fatalf("unfiltered push: %v", err)
+	}
+	if result2.SessionsPushed != 1 {
+		t.Errorf(
+			"sessions pushed = %d, want 1",
+			result2.SessionsPushed,
+		)
+	}
+}
+
 func TestPushSimplePK(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
