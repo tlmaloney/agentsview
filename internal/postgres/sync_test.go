@@ -1097,13 +1097,44 @@ func TestPushAgentFilterDoesNotAdvanceWatermark(t *testing.T) {
 	}
 
 	started := "2026-03-28T12:00:00Z"
-	// Insert a claude session.
+
+	// Insert a codex session and push it to establish a
+	// non-empty watermark.
+	if err := local.UpsertSession(db.Session{
+		ID:           "sess-codex",
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "codex",
+		StartedAt:    &started,
+		MessageCount: 1,
+	}); err != nil {
+		t.Fatalf("upsert codex session: %v", err)
+	}
+	if err := local.InsertMessages([]db.Message{
+		{SessionID: "sess-codex", Ordinal: 0, Role: "user", Content: "hi"},
+	}); err != nil {
+		t.Fatalf("insert codex message: %v", err)
+	}
+	if _, err := ps.Push(ctx, PushOptions{}); err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+	savedWatermark, err := local.GetSyncState("last_push_at")
+	if err != nil {
+		t.Fatalf("reading initial watermark: %v", err)
+	}
+	if savedWatermark == "" {
+		t.Fatal("expected non-empty watermark after initial push")
+	}
+
+	// Insert a claude session after the watermark.
+	time.Sleep(10 * time.Millisecond)
+	started2 := "2026-03-28T12:01:00Z"
 	if err := local.UpsertSession(db.Session{
 		ID:           "sess-claude",
 		Project:      "proj",
 		Machine:      "local",
 		Agent:        "claude",
-		StartedAt:    &started,
+		StartedAt:    &started2,
 		MessageCount: 1,
 	}); err != nil {
 		t.Fatalf("upsert claude session: %v", err)
@@ -1114,9 +1145,8 @@ func TestPushAgentFilterDoesNotAdvanceWatermark(t *testing.T) {
 		t.Fatalf("insert claude message: %v", err)
 	}
 
-	// Push only codex sessions — should match nothing.
+	// Push only codex sessions — should match nothing new.
 	result, err := ps.Push(ctx, PushOptions{
-		Full:        true,
 		AgentFilter: "codex",
 	})
 	if err != nil {
@@ -1129,20 +1159,21 @@ func TestPushAgentFilterDoesNotAdvanceWatermark(t *testing.T) {
 		)
 	}
 
-	// Watermark must not have advanced.
+	// Watermark must be unchanged.
 	watermark, err := local.GetSyncState("last_push_at")
 	if err != nil {
 		t.Fatalf("reading watermark: %v", err)
 	}
-	if watermark != "" {
+	if watermark != savedWatermark {
 		t.Errorf(
-			"watermark = %q, want empty (not advanced)",
-			watermark,
+			"watermark = %q, want %q (unchanged)",
+			watermark, savedWatermark,
 		)
 	}
 
-	// An unfiltered full push should still pick up the session.
-	result2, err := ps.Push(ctx, PushOptions{Full: true})
+	// An unfiltered incremental push should still pick up
+	// the claude session.
+	result2, err := ps.Push(ctx, PushOptions{})
 	if err != nil {
 		t.Fatalf("unfiltered push: %v", err)
 	}
